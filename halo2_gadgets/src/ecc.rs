@@ -983,6 +983,15 @@ pub(crate) mod tests {
         assert_eq!(prover.verify(), Ok(()))
     }
 
+    #[test]
+    fn test_ecc_chip_fixed_against_stored_circuit() {
+        let circuit = MyEccCircuit::<PallasLookupRangeCheckConfig>::with_version(
+            false,
+            CircuitVersion::AnchoredBase,
+        );
+        test_against_stored_circuit(circuit, "ecc_chip_fixed", 3872);
+    }
+
     // Old proofs must still verify under the old (unanchored) verifying key, so that a node
     // can sync the chain from before the fix. These fixtures are the original (pre-fix)
     // `vk`/`proof`, reproduced here by the `InsecureUnanchoredBase` circuit.
@@ -1017,6 +1026,15 @@ pub(crate) mod tests {
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
 
         assert_eq!(prover.verify(), Ok(()))
+    }
+
+    #[test]
+    fn test_against_stored_ecc_chip_4_5b_fixed() {
+        let circuit = MyEccCircuit::<PallasLookupRangeCheck4_5BConfig>::with_version(
+            false,
+            CircuitVersion::AnchoredBase,
+        );
+        test_against_stored_circuit(circuit, "ecc_chip_4_5b_fixed", 3968);
     }
 
     #[test]
