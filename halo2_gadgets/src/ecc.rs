@@ -598,6 +598,7 @@ pub(crate) mod tests {
         },
         CircuitVersion, FixedPoints,
     };
+    use crate::test_circuits::test_utils::test_against_stored_circuit;
     use crate::utilities::lookup_range_check::LookupRangeCheckConfig;
 
     #[derive(Debug, Eq, PartialEq, Clone)]
