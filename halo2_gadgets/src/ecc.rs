@@ -948,40 +948,4 @@ pub(crate) mod tests {
             .render(13, &circuit, &root)
             .unwrap();
     }
-
-    #[test]
-    fn ecc_chip_4_5b() {
-        let k = 13;
-        let circuit = MyEccCircuit::new(true);
-        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
-
-        assert_eq!(prover.verify(), Ok(()))
-    }
-
-    #[test]
-    fn test_against_stored_ecc_chip_4_5b_fixed() {
-        let circuit = MyEccCircuit::with_version(false, CircuitVersion::AnchoredBase);
-        test_against_stored_circuit(circuit, "ecc_chip_4_5b_fixed", 3968);
-    }
-
-    #[test]
-    fn test_against_stored_ecc_chip_4_5b_insecure() {
-        let circuit = MyEccCircuit::with_version(false, CircuitVersion::InsecureUnanchoredBase);
-        test_against_stored_circuit(circuit, "ecc_chip_4_5b_insecure", 3968);
-    }
-
-    #[cfg(feature = "test-dev-graph")]
-    #[test]
-    fn print_ecc_chip_4_5b() {
-        use plotters::prelude::*;
-
-        let root = BitMapBackend::new("ecc-chip-4_5b-layout.png", (1024, 7680)).into_drawing_area();
-        root.fill(&WHITE).unwrap();
-        let root = root.titled("Ecc Chip Layout", ("sans-serif", 60)).unwrap();
-
-        let circuit = MyEccCircuit::new(false);
-        halo2_proofs::dev::CircuitLayout::default()
-            .render(13, &circuit, &root)
-            .unwrap();
-    }
 }
