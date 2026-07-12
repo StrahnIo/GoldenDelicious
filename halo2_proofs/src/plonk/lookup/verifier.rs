@@ -1,13 +1,13 @@
 use std::iter;
 
 use super::super::{
-    circuit::Expression, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, circuit::Expression,
 };
 use super::Argument;
 use crate::{
     arithmetic::CurveAffine,
     plonk::{Error, VerifyingKey},
-    poly::{multiopen::VerifierQuery, Rotation},
+    poly::{Rotation, multiopen::VerifierQuery},
     transcript::{EncodedChallenge, TranscriptRead},
 };
 use ff::Field;
@@ -103,7 +103,7 @@ impl<C: CurveAffine> Evaluated<C> {
         advice_evals: &[C::Scalar],
         fixed_evals: &[C::Scalar],
         instance_evals: &[C::Scalar],
-    ) -> impl Iterator<Item = C::Scalar> + 'a {
+    ) -> impl Iterator<Item = C::Scalar> + 'a + use<'a, C> {
         let active_rows = C::Scalar::ONE - (l_last + l_blind);
 
         let product_expression = || {

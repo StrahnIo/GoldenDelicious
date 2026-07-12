@@ -50,11 +50,11 @@ impl<F: Field> Argument<F> {
         // degree 3:
         // (1 - (l_last(X) + l_blind(X))) * (a′(X) − s′(X))⋅(a′(X) − a′(\omega^{-1} X)) = 0
         let mut input_degree = 1;
-        for expr in self.input_expressions.iter() {
+        for expr in &self.input_expressions {
             input_degree = std::cmp::max(input_degree, expr.degree());
         }
         let mut table_degree = 1;
-        for expr in self.table_expressions.iter() {
+        for expr in &self.table_expressions {
             table_degree = std::cmp::max(table_degree, expr.degree());
         }
 

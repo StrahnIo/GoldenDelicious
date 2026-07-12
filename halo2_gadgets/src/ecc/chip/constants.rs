@@ -2,8 +2,8 @@
 
 use arrayvec::ArrayVec;
 use group::{
-    ff::{Field, PrimeField},
     Curve,
+    ff::{Field, PrimeField},
 };
 use halo2_proofs::arithmetic::lagrange_interpolate;
 use pasta_curves::{arithmetic::CurveAffine, pallas};
@@ -15,12 +15,10 @@ pub const FIXED_BASE_WINDOW_SIZE: usize = 3;
 pub const H: usize = 1 << FIXED_BASE_WINDOW_SIZE;
 
 /// Number of windows for a full-width scalar
-pub const NUM_WINDOWS: usize =
-    (pallas::Scalar::NUM_BITS as usize + FIXED_BASE_WINDOW_SIZE - 1) / FIXED_BASE_WINDOW_SIZE;
+pub const NUM_WINDOWS: usize = (pallas::Scalar::NUM_BITS as usize).div_ceil(FIXED_BASE_WINDOW_SIZE);
 
 /// Number of windows for a short signed scalar
-pub const NUM_WINDOWS_SHORT: usize =
-    (L_SCALAR_SHORT + FIXED_BASE_WINDOW_SIZE - 1) / FIXED_BASE_WINDOW_SIZE;
+pub const NUM_WINDOWS_SHORT: usize = L_SCALAR_SHORT.div_ceil(FIXED_BASE_WINDOW_SIZE);
 
 /// $\ell_\mathsf{value}$
 /// Number of bits in an unsigned short scalar.
@@ -176,7 +174,7 @@ pub fn test_zs_and_us<C: CurveAffine>(base: C, z: &[u64], u: &[[[u8; 32]; H]], n
 pub fn test_lagrange_coeffs<C: CurveAffine>(base: C, num_windows: usize) {
     /// Evaluate y = f(x) given the coefficients of f(x)
     fn evaluate<C: CurveAffine>(x: u8, coeffs: &[C::Base]) -> C::Base {
-        let x = C::Base::from(x as u64);
+        let x = C::Base::from(u64::from(x));
         coeffs
             .iter()
             .rev()
@@ -197,7 +195,7 @@ pub fn test_lagrange_coeffs<C: CurveAffine>(base: C, num_windows: usize) {
 
                 // Compute the actual x-coordinate of the multiple [(k+2)*(8^w)]B.
                 let point = base
-                    * C::Scalar::from(bits as u64 + 2)
+                    * C::Scalar::from(u64::from(bits) + 2)
                     * C::Scalar::from(H as u64).pow([idx as u64, 0, 0, 0]);
                 let x = *point.to_affine().coordinates().unwrap().x();
 
@@ -217,7 +215,7 @@ pub fn test_lagrange_coeffs<C: CurveAffine>(base: C, num_windows: usize) {
         let offset = (0..(num_windows - 1)).fold(C::Scalar::ZERO, |acc, w| {
             acc + C::Scalar::from(2).pow([FIXED_BASE_WINDOW_SIZE as u64 * w as u64 + 1, 0, 0, 0])
         });
-        let scalar = C::Scalar::from(bits as u64)
+        let scalar = C::Scalar::from(u64::from(bits))
             * C::Scalar::from(H as u64).pow([(num_windows - 1) as u64, 0, 0, 0])
             - offset;
         let point = base * scalar;
@@ -231,11 +229,11 @@ pub fn test_lagrange_coeffs<C: CurveAffine>(base: C, num_windows: usize) {
 #[cfg(test)]
 mod tests {
     use ff::FromUniformBytes;
-    use group::{ff::Field, Curve, Group};
+    use group::{Curve, Group, ff::Field};
     use pasta_curves::{arithmetic::CurveAffine, pallas};
     use proptest::prelude::*;
 
-    use super::{compute_window_table, find_zs_and_us, test_lagrange_coeffs, H, NUM_WINDOWS};
+    use super::{H, NUM_WINDOWS, compute_window_table, find_zs_and_us, test_lagrange_coeffs};
 
     prop_compose! {
         /// Generate an arbitrary Pallas point.

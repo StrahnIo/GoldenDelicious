@@ -3,7 +3,7 @@ use super::{
     RoundWordSpread, State, UpperSigmaVar,
 };
 use crate::sha256::table16::{
-    util::*, AssignedBits, SpreadVar, SpreadWord, StateWord, Table16Assignment,
+    AssignedBits, SpreadVar, SpreadWord, StateWord, Table16Assignment, util::*,
 };
 use halo2_proofs::{
     circuit::{Region, Value},

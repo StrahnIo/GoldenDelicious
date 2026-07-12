@@ -142,7 +142,7 @@ impl<F: Field> AssignedCell<Assigned<F>, F> {
 impl<F: Field> From<AssignedCell<F, F>> for AssignedCell<Assigned<F>, F> {
     fn from(ac: AssignedCell<F, F>) -> Self {
         AssignedCell {
-            value: ac.value.map(|a| a.into()),
+            value: ac.value.map(std::convert::Into::into),
             cell: ac.cell,
             _marker: Default::default(),
         }
@@ -557,7 +557,7 @@ impl<'a, F: Field, L: Layouter<F> + 'a> Drop for NamespacedLayouter<'a, F, L> {
                     if is_second_frame {
                         // Resolve this instruction pointer to a symbol name.
                         backtrace::resolve_frame(frame, |symbol| {
-                            gadget_name = symbol.name().map(|name| format!("{:#}", name));
+                            gadget_name = symbol.name().map(|name| format!("{name:#}"));
                         });
 
                         // We are done!

@@ -31,7 +31,7 @@ impl<Lookup: PallasLookupRangeCheck> Config<Lookup> {
         lookup_config: Lookup,
         advices: [Column<Advice>; 3],
     ) -> Self {
-        for advice in advices.iter() {
+        for advice in &advices {
             meta.enable_equality(*advice);
         }
 

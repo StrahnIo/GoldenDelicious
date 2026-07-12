@@ -2,8 +2,8 @@
 
 use super::{BaseFitsInScalarInstructions, EccInstructions, FixedPoints};
 use crate::utilities::{
-    lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
     UtilitiesInstructions,
+    lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
 };
 use arrayvec::ArrayVec;
 
@@ -99,7 +99,9 @@ impl EccPoint {
 
     #[cfg(test)]
     fn is_identity(&self) -> Value<bool> {
-        self.x.value().map(|x| x.is_zero_vartime())
+        self.x
+            .value()
+            .map(halo2_proofs::plonk::Assigned::is_zero_vartime)
     }
 }
 
@@ -525,6 +527,7 @@ where
         )
     }
 
+    #[allow(clippy::todo)] // Deliberately unimplemented for halo2_gadgets v0.1.0.
     fn witness_scalar_var(
         &self,
         _layouter: &mut impl Layouter<pallas::Base>,
@@ -624,6 +627,8 @@ where
                 base,
                 self.circuit_version,
             ),
+            // Deliberately unimplemented for halo2_gadgets v0.1.0.
+            #[allow(clippy::todo)]
             ScalarVar::FullWidth => {
                 todo!()
             }
@@ -638,7 +643,7 @@ where
     ) -> Result<(Self::Point, Self::ScalarFixed), Error> {
         let config = self.config().mul_fixed_full.clone();
         config.assign(
-            layouter.namespace(|| format!("fixed-base mul of {:?}", base)),
+            layouter.namespace(|| format!("fixed-base mul of {base:?}")),
             scalar,
             base,
         )
@@ -652,7 +657,7 @@ where
     ) -> Result<(Self::Point, Self::ScalarFixedShort), Error> {
         let config = self.config().mul_fixed_short.clone();
         config.assign(
-            layouter.namespace(|| format!("short fixed-base mul of {:?}", base)),
+            layouter.namespace(|| format!("short fixed-base mul of {base:?}")),
             scalar,
             base,
         )
@@ -666,7 +671,7 @@ where
     ) -> Result<Self::Point, Error> {
         let config = self.config().mul_fixed_base_field.clone();
         config.assign(
-            layouter.namespace(|| format!("base-field elem fixed-base mul of {:?}", base)),
+            layouter.namespace(|| format!("base-field elem fixed-base mul of {base:?}")),
             base_field_elem,
             base,
         )

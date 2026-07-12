@@ -147,7 +147,7 @@ where
                 |(i, piece)| -> Result<MessagePiece<C, SinsemillaChip, K, MAX_WORDS>, Error> {
                     MessagePiece::from_bitstring(
                         chip.clone(),
-                        layouter.namespace(|| format!("message piece {}", i)),
+                        layouter.namespace(|| format!("message piece {i}")),
                         piece,
                     )
                 },
@@ -530,15 +530,15 @@ pub(crate) mod tests {
     use rand::rngs::OsRng;
 
     use super::{
-        chip::{SinsemillaChip, SinsemillaConfig},
         CommitDomain, CommitDomains, HashDomain, HashDomains, Message, MessagePiece,
+        chip::{SinsemillaChip, SinsemillaConfig},
     };
 
     use crate::{
         ecc::{
-            chip::{find_zs_and_us, EccChip, EccConfig, H, NUM_WINDOWS},
-            tests::{FullWidth, TestFixedBases},
             CircuitVersion, NonIdentityPoint, ScalarFixed,
+            chip::{EccChip, EccConfig, H, NUM_WINDOWS, find_zs_and_us},
+            tests::{FullWidth, TestFixedBases},
         },
         sinsemilla::primitives::{self as sinsemilla, K},
         test_circuits::test_utils::test_against_stored_circuit,
@@ -547,7 +547,7 @@ pub(crate) mod tests {
         },
     };
 
-    use group::{ff::Field, Curve};
+    use group::{Curve, ff::Field};
     use lazy_static::lazy_static;
     use pasta_curves::pallas;
 
@@ -831,7 +831,7 @@ pub(crate) mod tests {
         let k = 11;
         let circuit = MySinsemillaCircuit::<PallasLookupRangeCheckConfig>::new();
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]
@@ -898,7 +898,7 @@ pub(crate) mod tests {
         let circuit =
             MySinsemillaCircuitWithHashFromPrivatePoint::<PallasLookupRangeCheck4_5BConfig>::new();
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]

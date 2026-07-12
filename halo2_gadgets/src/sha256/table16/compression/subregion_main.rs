@@ -1,5 +1,5 @@
-use super::super::{AssignedBits, RoundWord, RoundWordA, RoundWordE, StateWord, ROUND_CONSTANTS};
-use super::{compression_util::*, CompressionConfig, State};
+use super::super::{AssignedBits, ROUND_CONSTANTS, RoundWord, RoundWordA, RoundWordE, StateWord};
+use super::{CompressionConfig, State, compression_util::*};
 use halo2_proofs::{circuit::Region, pasta::pallas, plonk::Error};
 
 impl CompressionConfig {

@@ -10,20 +10,20 @@ use pasta_curves::pallas;
 use super::MerkleInstructions;
 
 use crate::{
-    sinsemilla::{primitives as sinsemilla, MessagePiece},
+    sinsemilla::{MessagePiece, primitives as sinsemilla},
     utilities::{
-        lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
         RangeConstrained,
+        lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
     },
     {
         ecc::FixedPoints,
         sinsemilla::{
-            chip::{SinsemillaChip, SinsemillaConfig},
             CommitDomains, HashDomains, SinsemillaInstructions,
+            chip::{SinsemillaChip, SinsemillaConfig},
         },
         utilities::{
-            cond_swap::{CondSwapChip, CondSwapConfig, CondSwapInstructions},
             UtilitiesInstructions,
+            cond_swap::{CondSwapChip, CondSwapConfig, CondSwapInstructions},
         },
     },
 };
@@ -320,7 +320,7 @@ where
         //
         // https://p.z.cash/proto:merkle-crh-orchard
         let (point, zs) = self.hash_to_point(
-            layouter.namespace(|| format!("hash at l = {}", l)),
+            layouter.namespace(|| format!("hash at l = {l}")),
             Q,
             vec![a.inner(), b.inner(), c.inner()].into(),
         )?;
@@ -347,7 +347,7 @@ where
                     // The layer with 2^n nodes is called "layer n".
                     config.q_decompose.enable(&mut region, 0)?;
                     region.assign_advice_from_constant(
-                        || format!("l {}", l),
+                        || format!("l {l}"),
                         config.advices[4],
                         1,
                         pallas::Base::from(l as u64),

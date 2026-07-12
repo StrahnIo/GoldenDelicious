@@ -1,23 +1,23 @@
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
-    pasta::{pallas, EqAffine},
+    pasta::{EqAffine, pallas},
     plonk::{
-        create_proof, keygen_pk, keygen_vk, verify_proof, Circuit, ConstraintSystem, Error,
-        SingleVerifier,
+        Circuit, ConstraintSystem, Error, SingleVerifier, create_proof, keygen_pk, keygen_vk,
+        verify_proof,
     },
     poly::commitment::Params,
     transcript::{Blake2bRead, Blake2bWrite, Challenge255},
 };
 use rand::rngs::OsRng;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::{
-    fs::{create_dir_all, File},
-    io::{prelude::*, BufReader},
+    fs::{File, create_dir_all},
+    io::{BufReader, prelude::*},
     path::Path,
 };
 
-use halo2_gadgets::sha256::{BlockWord, Sha256, Table16Chip, Table16Config, BLOCK_SIZE};
+use halo2_gadgets::sha256::{BLOCK_SIZE, BlockWord, Sha256, Table16Chip, Table16Config};
 
 #[allow(dead_code)]
 fn bench(name: &str, k: u32, c: &mut Criterion) {

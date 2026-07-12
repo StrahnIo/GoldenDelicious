@@ -299,10 +299,9 @@ impl<const NUM_BITS: usize> Config<NUM_BITS> {
         for (row, k) in bits.iter().enumerate() {
             // z_{i} = 2 * z_{i+1} + k_i
             // https://p.z.cash/halo2-0.1:ecc-var-mul-witness-scalar?partial
-            let z_val = z
-                .value()
-                .zip(k.as_ref())
-                .map(|(z_val, k)| pallas::Base::from(2) * z_val + pallas::Base::from(*k as u64));
+            let z_val = z.value().zip(k.as_ref()).map(|(z_val, k)| {
+                pallas::Base::from(2) * z_val + pallas::Base::from(u64::from(*k))
+            });
             z = region.assign_advice(|| "z", self.z, row + offset, || z_val)?;
             zs.push(Z(z.clone()));
 

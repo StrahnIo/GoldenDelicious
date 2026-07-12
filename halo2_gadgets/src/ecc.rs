@@ -300,11 +300,11 @@ impl<C: CurveAffine, EccChip: EccInstructions<C>> NonIdentityPoint<C, EccChip> {
         other: &Other,
     ) -> Result<(), Error> {
         let other: Point<C, EccChip> = (other.clone()).into();
-        self.chip.constrain_equal(
-            &mut layouter,
-            &Point::<C, EccChip>::from(self.clone()).inner,
-            &other.inner,
-        )
+        // Bind this rather than leaving it a temporary of the tail expression, so its
+        // drop order relative to `other` does not depend on the edition.
+        let this: Point<C, EccChip> = self.clone().into();
+        self.chip
+            .constrain_equal(&mut layouter, &this.inner, &other.inner)
     }
 
     /// Returns the inner point.
@@ -625,7 +625,7 @@ impl<C: CurveAffine, EccChip: EccInstructions<C>> FixedPointShort<C, EccChip> {
 #[cfg(test)]
 pub(crate) mod tests {
     use ff::PrimeField;
-    use group::{prime::PrimeCurveAffine, Curve, Group};
+    use group::{Curve, Group, prime::PrimeCurveAffine};
     use std::marker::PhantomData;
 
     use halo2_proofs::{
@@ -637,11 +637,11 @@ pub(crate) mod tests {
     use pasta_curves::pallas;
 
     use super::{
-        chip::{
-            find_zs_and_us, BaseFieldElem, EccChip, EccConfig, FixedPoint, FullScalar, ShortScalar,
-            H, NUM_WINDOWS, NUM_WINDOWS_SHORT,
-        },
         CircuitVersion, FixedPoints,
+        chip::{
+            BaseFieldElem, EccChip, EccConfig, FixedPoint, FullScalar, H, NUM_WINDOWS,
+            NUM_WINDOWS_SHORT, ShortScalar, find_zs_and_us,
+        },
     };
     use crate::{
         test_circuits::test_utils::test_against_stored_circuit,
@@ -899,7 +899,7 @@ pub(crate) mod tests {
                 super::chip::witness_point::tests::test_witness_non_id(
                     chip.clone(),
                     layouter.namespace(|| "witness non-identity point"),
-                )
+                );
             }
 
             // Test complete addition
@@ -980,7 +980,7 @@ pub(crate) mod tests {
         let k = 13;
         let circuit = MyEccCircuit::<PallasLookupRangeCheckConfig>::new(true);
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]
@@ -1025,7 +1025,7 @@ pub(crate) mod tests {
         let circuit = MyEccCircuit::<PallasLookupRangeCheck4_5BConfig>::new(true);
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
 
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]

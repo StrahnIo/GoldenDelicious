@@ -624,7 +624,7 @@ mod proptests {
         #[test]
         fn operation_commutativity((values, operations) in arb_testcase()) {
             // Evaluate the values at the start.
-            let elements: Vec<_> = values.iter().cloned().map(|v| v.evaluate()).collect();
+            let elements: Vec<_> = values.iter().cloned().map(Assigned::evaluate).collect();
 
             // Apply the operations to both the deferred and evaluated values.
             fn evaluate<F: UnaryOperand + BinaryOperand>(

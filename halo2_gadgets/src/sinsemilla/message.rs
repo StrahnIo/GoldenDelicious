@@ -12,7 +12,7 @@ impl<F: PrimeFieldBits, const K: usize, const MAX_WORDS: usize> From<Vec<Message
 {
     fn from(pieces: Vec<MessagePiece<F, K>>) -> Self {
         // A message cannot contain more than `MAX_WORDS` words.
-        assert!(pieces.iter().map(|piece| piece.num_words()).sum::<usize>() < MAX_WORDS);
+        assert!(pieces.iter().map(MessagePiece::num_words).sum::<usize>() < MAX_WORDS);
         Message(pieces)
     }
 }

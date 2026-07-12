@@ -1,4 +1,4 @@
-use super::super::{util::*, Gate};
+use super::super::{Gate, util::*};
 
 use group::ff::{Field, PrimeField};
 use halo2_proofs::plonk::{Constraint, Constraints, Expression};
@@ -286,7 +286,7 @@ impl<F: PrimeField> CompressionGate<F> {
         impl Iterator<Item = (&'static str, Expression<F>)>,
     > {
         let neg_check = {
-            let evens = Self::ones() * F::from(MASK_EVEN_32 as u64);
+            let evens = Self::ones() * F::from(u64::from(MASK_EVEN_32));
             // evens - spread_e_lo = spread_e_neg_lo
             let lo_check = spread_e_neg_lo.clone() + spread_e_lo + (evens.clone() * (-F::ONE));
             // evens - spread_e_hi = spread_e_neg_hi

@@ -137,7 +137,7 @@ impl<const LEN: usize> AssignedBits<LEN> {
         <T as TryInto<[bool; LEN]>>::Error: std::fmt::Debug,
     {
         let value: Value<[bool; LEN]> = value.map(|v| v.try_into().unwrap());
-        let value: Value<Bits<LEN>> = value.map(|v| v.into());
+        let value: Value<Bits<LEN>> = value.map(std::convert::Into::into);
 
         let column: Column<Any> = column.into();
         match column.column_type() {
@@ -159,7 +159,7 @@ impl<const LEN: usize> AssignedBits<LEN> {
 
 impl AssignedBits<16> {
     fn value_u16(&self) -> Value<u16> {
-        self.value().map(|v| v.into())
+        self.value().map(std::convert::Into::into)
     }
 
     fn assign<A, AR>(
@@ -174,7 +174,7 @@ impl AssignedBits<16> {
         AR: Into<String>,
     {
         let column: Column<Any> = column.into();
-        let value: Value<Bits<16>> = value.map(|v| v.into());
+        let value: Value<Bits<16>> = value.map(std::convert::Into::into);
         match column.column_type() {
             Any::Advice => {
                 region.assign_advice(annotation, column.try_into().unwrap(), offset, || {
@@ -194,7 +194,7 @@ impl AssignedBits<16> {
 
 impl AssignedBits<32> {
     fn value_u32(&self) -> Value<u32> {
-        self.value().map(|v| v.into())
+        self.value().map(std::convert::Into::into)
     }
 
     fn assign<A, AR>(
@@ -209,7 +209,7 @@ impl AssignedBits<32> {
         AR: Into<String>,
     {
         let column: Column<Any> = column.into();
-        let value: Value<Bits<32>> = value.map(|v| v.into());
+        let value: Value<Bits<32>> = value.map(std::convert::Into::into);
         match column.column_type() {
             Any::Advice => {
                 region.assign_advice(annotation, column.try_into().unwrap(), offset, || {
@@ -300,7 +300,7 @@ impl Table16Chip {
         let _a_9 = extras[5];
 
         // Add all advice columns to permutation
-        for column in [a_1, a_2, a_3, a_4, a_5, a_6, a_7, a_8].iter() {
+        for column in &[a_1, a_2, a_3, a_4, a_5, a_6, a_7, a_8] {
             meta.enable_equality(*column);
         }
 
@@ -452,8 +452,8 @@ trait Table16Assignment {
 #[cfg(test)]
 #[cfg(feature = "test-dev-graph")]
 mod tests {
-    use super::super::{Sha256, BLOCK_SIZE};
-    use super::{message_schedule::msg_schedule_test_input, Table16Chip, Table16Config};
+    use super::super::{BLOCK_SIZE, Sha256};
+    use super::{Table16Chip, Table16Config, message_schedule::msg_schedule_test_input};
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
         pasta::pallas,

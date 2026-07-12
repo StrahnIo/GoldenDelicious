@@ -1,13 +1,14 @@
 //! Chip implementations for the Sinsemilla gadgets.
 
 use super::{
+    CommitDomains, HashDomains, SinsemillaInstructions,
     message::{Message, MessagePiece},
-    primitives as sinsemilla, CommitDomains, HashDomains, SinsemillaInstructions,
+    primitives as sinsemilla,
 };
 use crate::{
     ecc::{
-        chip::{DoubleAndAdd, NonIdentityEccPoint},
         FixedPoints,
+        chip::{DoubleAndAdd, NonIdentityEccPoint},
     },
     utilities::lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
 };
@@ -177,7 +178,7 @@ where
         allow_init_from_private_point: bool,
     ) -> <Self as Chip<pallas::Base>>::Config {
         // Enable equality on all advice columns
-        for advice in advices.iter() {
+        for advice in &advices {
             meta.enable_equality(*advice);
         }
 

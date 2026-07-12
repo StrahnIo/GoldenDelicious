@@ -93,8 +93,7 @@ impl FromStr for Poly {
     type Err = ParseIntError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut rotations: Vec<isize> =
-            s.split(',').map(|r| r.parse()).collect::<Result<_, _>>()?;
+        let mut rotations: Vec<isize> = s.split(',').map(str::parse).collect::<Result<_, _>>()?;
         rotations.sort_unstable();
         Ok(Poly { rotations })
     }
@@ -128,7 +127,7 @@ impl Lookup {
         2 + cmp::max(1, self.input_deg) + cmp::max(1, self.table_deg)
     }
 
-    fn queries(&self) -> impl Iterator<Item = Poly> {
+    fn queries(&self) -> impl Iterator<Item = Poly> + use<> {
         // - product commitments at x and x_inv
         // - input commitments at x and x_inv
         // - table commitments at x
@@ -163,7 +162,7 @@ impl Permutation {
         cmp::max(self.columns + 1, 2)
     }
 
-    fn queries(&self) -> impl Iterator<Item = Poly> {
+    fn queries(&self) -> impl Iterator<Item = Poly> + use<> {
         // - product commitments at x and x_inv
         // - polynomial commitments at x
         let product = "0,-1".parse().unwrap();
@@ -171,7 +170,7 @@ impl Permutation {
 
         iter::empty()
             .chain(Some(product))
-            .chain(iter::repeat(poly).take(self.columns))
+            .chain(std::iter::repeat_n(poly, self.columns))
     }
 }
 
@@ -200,8 +199,8 @@ impl From<CostOptions> for Circuit {
         let max_deg = [1, opts.gate_degree]
             .iter()
             .cloned()
-            .chain(opts.lookup.iter().map(|l| l.required_degree()))
-            .chain(opts.permutation.iter().map(|p| p.required_degree()))
+            .chain(opts.lookup.iter().map(Lookup::required_degree))
+            .chain(opts.permutation.iter().map(Permutation::required_degree))
             .max()
             .unwrap();
 
@@ -210,9 +209,9 @@ impl From<CostOptions> for Circuit {
             .chain(opts.instance.iter())
             .chain(opts.fixed.iter())
             .cloned()
-            .chain(opts.lookup.iter().flat_map(|l| l.queries()))
-            .chain(opts.permutation.iter().flat_map(|p| p.queries()))
-            .chain(iter::repeat("0".parse().unwrap()).take(max_deg - 1))
+            .chain(opts.lookup.iter().flat_map(Lookup::queries))
+            .chain(opts.permutation.iter().flat_map(Permutation::queries))
+            .chain(std::iter::repeat_n("0".parse().unwrap(), max_deg - 1))
             .collect();
 
         let column_queries = queries.len();
@@ -294,7 +293,7 @@ impl Circuit {
 fn main() {
     let opts = CostOptions::parse_args_default_or_exit();
     let c = Circuit::from(opts);
-    println!("{:#?}", c);
+    println!("{c:#?}");
     println!("Proof size: {} bytes", c.proof_size());
     println!(
         "Verification: at least {}ms",

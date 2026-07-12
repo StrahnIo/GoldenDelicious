@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use ff::Field;
 use halo2_gadgets::{
     poseidon::primitives::{self as poseidon, ConstantLength, P128Pow5T3},
@@ -8,7 +8,7 @@ use halo2_gadgets::{
 use pasta_curves::pallas;
 #[cfg(unix)]
 use pprof::criterion::{Output, PProfProfiler};
-use rand::{rngs::OsRng, Rng};
+use rand::{Rng, rngs::OsRng};
 
 fn bench_primitives(c: &mut Criterion) {
     let mut rng = OsRng;
@@ -21,7 +21,7 @@ fn bench_primitives(c: &mut Criterion) {
         group.bench_function("2-to-1", |b| {
             b.iter(|| {
                 poseidon::Hash::<_, P128Pow5T3, ConstantLength<2>, 3, 2>::init().hash(message)
-            })
+            });
         });
     }
 
@@ -30,7 +30,7 @@ fn bench_primitives(c: &mut Criterion) {
 
         let hasher = sinsemilla::HashDomain::new("hasher");
         let committer = sinsemilla::CommitDomain::new("committer");
-        let bits: Vec<bool> = (0..1086).map(|_| rng.gen()).collect();
+        let bits: Vec<bool> = (0..1086).map(|_| rng.r#gen()).collect();
         let r = pallas::Scalar::random(rng);
 
         // Benchmark the input sizes we use in Orchard:
@@ -39,19 +39,19 @@ fn bench_primitives(c: &mut Criterion) {
         // - 1086 bits for NoteCommit
         for size in [510, 520, 1086] {
             group.bench_function(BenchmarkId::new("hash-to-point", size), |b| {
-                b.iter(|| hasher.hash_to_point(bits[..size].iter().cloned()))
+                b.iter(|| hasher.hash_to_point(bits[..size].iter().cloned()));
             });
 
             group.bench_function(BenchmarkId::new("hash", size), |b| {
-                b.iter(|| hasher.hash(bits[..size].iter().cloned()))
+                b.iter(|| hasher.hash(bits[..size].iter().cloned()));
             });
 
             group.bench_function(BenchmarkId::new("commit", size), |b| {
-                b.iter(|| committer.commit(bits[..size].iter().cloned(), &r))
+                b.iter(|| committer.commit(bits[..size].iter().cloned(), &r));
             });
 
             group.bench_function(BenchmarkId::new("short-commit", size), |b| {
-                b.iter(|| committer.commit(bits[..size].iter().cloned(), &r))
+                b.iter(|| committer.commit(bits[..size].iter().cloned(), &r));
             });
         }
     }

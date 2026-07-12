@@ -624,7 +624,7 @@ impl<V> Value<V> {
         for<'v> Assigned<F>: From<&'v V>,
     {
         Value {
-            inner: self.inner.as_ref().map(|v| v.into()),
+            inner: self.inner.as_ref().map(std::convert::Into::into),
         }
     }
 
@@ -634,7 +634,7 @@ impl<V> Value<V> {
         V: Into<Assigned<F>>,
     {
         Value {
-            inner: self.inner.map(|v| v.into()),
+            inner: self.inner.map(std::convert::Into::into),
         }
     }
 
@@ -697,7 +697,7 @@ impl<F: Field> Value<Assigned<F>> {
     /// If the denominator is zero, the returned value is zero.
     pub fn evaluate(self) -> Value<F> {
         Value {
-            inner: self.inner.map(|v| v.evaluate()),
+            inner: self.inner.map(Assigned::evaluate),
         }
     }
 }

@@ -7,9 +7,9 @@ use ff::Field;
 
 use crate::{
     circuit::{
-        layouter::{RegionColumn, RegionLayouter, RegionShape},
-        table_layouter::{compute_table_lengths, SimpleTableLayouter},
         Cell, Layouter, Region, RegionIndex, RegionStart, Table, TableLayouter, Value,
+        layouter::{RegionColumn, RegionLayouter, RegionShape},
+        table_layouter::{SimpleTableLayouter, compute_table_lengths},
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Circuit, Column, Error, Fixed, FloorPlanner, Instance,
@@ -207,11 +207,11 @@ impl<'a, F: Field, CS: Assignment<F> + 'a> Layouter<F> for SingleChipLayouter<'a
         NR: Into<String>,
         N: FnOnce() -> NR,
     {
-        self.cs.push_namespace(name_fn)
+        self.cs.push_namespace(name_fn);
     }
 
     fn pop_namespace(&mut self, gadget_name: Option<String>) {
-        self.cs.pop_namespace(gadget_name)
+        self.cs.pop_namespace(gadget_name);
     }
 }
 

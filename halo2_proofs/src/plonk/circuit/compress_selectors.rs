@@ -155,7 +155,7 @@ where
 
             // Is this selector excluded from co-existing in the same
             // combination with any of the other selectors so far?
-            for &i in combination_added.iter() {
+            for &i in &combination_added {
                 if exclusion_matrix[j][i] {
                     continue 'try_selectors;
                 }
@@ -231,7 +231,7 @@ mod tests {
     use super::*;
     use crate::{plonk::FixedQuery, poly::Rotation};
     use pasta_curves::Fp;
-    use proptest::collection::{vec, SizeRange};
+    use proptest::collection::{SizeRange, vec};
     use proptest::prelude::*;
 
     prop_compose! {

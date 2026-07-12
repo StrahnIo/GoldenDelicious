@@ -8,7 +8,7 @@ use pasta_curves::arithmetic::CurveAffine;
 
 use super::{HashDomains, SinsemillaInstructions};
 
-use crate::utilities::{cond_swap::CondSwapInstructions, i2lebsp, UtilitiesInstructions};
+use crate::utilities::{UtilitiesInstructions, cond_swap::CondSwapInstructions, i2lebsp};
 
 pub mod chip;
 
@@ -64,13 +64,13 @@ pub struct MerklePath<
 }
 
 impl<
-        C: CurveAffine,
-        MerkleChip,
-        const PATH_LENGTH: usize,
-        const K: usize,
-        const MAX_WORDS: usize,
-        const PAR: usize,
-    > MerklePath<C, MerkleChip, PATH_LENGTH, K, MAX_WORDS, PAR>
+    C: CurveAffine,
+    MerkleChip,
+    const PATH_LENGTH: usize,
+    const K: usize,
+    const MAX_WORDS: usize,
+    const PAR: usize,
+> MerklePath<C, MerkleChip, PATH_LENGTH, K, MAX_WORDS, PAR>
 where
     MerkleChip: MerkleInstructions<C, PATH_LENGTH, K, MAX_WORDS> + Clone,
 {
@@ -99,13 +99,13 @@ where
 
 #[allow(non_snake_case)]
 impl<
-        C: CurveAffine,
-        MerkleChip,
-        const PATH_LENGTH: usize,
-        const K: usize,
-        const MAX_WORDS: usize,
-        const PAR: usize,
-    > MerklePath<C, MerkleChip, PATH_LENGTH, K, MAX_WORDS, PAR>
+    C: CurveAffine,
+    MerkleChip,
+    const PATH_LENGTH: usize,
+    const K: usize,
+    const MAX_WORDS: usize,
+    const PAR: usize,
+> MerklePath<C, MerkleChip, PATH_LENGTH, K, MAX_WORDS, PAR>
 where
     MerkleChip: MerkleInstructions<C, PATH_LENGTH, K, MAX_WORDS> + Clone,
 {
@@ -120,7 +120,7 @@ where
         leaf: MerkleChip::Var,
     ) -> Result<MerkleChip::Var, Error> {
         // Each chip processes `ceil(PATH_LENGTH / PAR)` layers.
-        let layers_per_chip = (PATH_LENGTH + PAR - 1) / PAR;
+        let layers_per_chip = PATH_LENGTH.div_ceil(PAR);
 
         // Assign each layer to a chip.
         let chips = (0..PATH_LENGTH).map(|i| self.chips[i / layers_per_chip].clone());
@@ -131,7 +131,7 @@ where
 
         // Get position as a PATH_LENGTH-bit bitstring (little-endian bit order).
         let pos: [Value<bool>; PATH_LENGTH] = {
-            let pos: Value<[bool; PATH_LENGTH]> = self.leaf_pos.map(|pos| i2lebsp(pos as u64));
+            let pos: Value<[bool; PATH_LENGTH]> = self.leaf_pos.map(|pos| i2lebsp(u64::from(pos)));
             pos.transpose_array()
         };
 
@@ -158,7 +158,7 @@ where
             // Compute the node in layer l from its children:
             //     M^l_i = MerkleCRH(l, M^{l+1}_{2i}, M^{l+1}_{2i+1})
             node = chip.hash_layer(
-                layouter.namespace(|| format!("MerkleCRH({}, left, right)", l)),
+                layouter.namespace(|| format!("MerkleCRH({l}, left, right)")),
                 Q,
                 l,
                 pair.0,
@@ -174,25 +174,24 @@ where
 /// Sinsemilla Merkle tree tests.
 pub mod tests {
     use super::{
-        chip::{MerkleChip, MerkleConfig},
         MerklePath,
+        chip::{MerkleChip, MerkleConfig},
     };
 
     use crate::{
         ecc::tests::TestFixedBases,
         sinsemilla::{
+            HashDomains,
             chip::SinsemillaChip,
             tests::{TestCommitDomain, TestHashDomain},
-            HashDomains,
         },
         test_circuits::test_utils::test_against_stored_circuit,
         utilities::{
-            i2lebsp,
+            UtilitiesInstructions, i2lebsp,
             lookup_range_check::{
                 PallasLookupRangeCheck, PallasLookupRangeCheck4_5BConfig,
                 PallasLookupRangeCheckConfig,
             },
-            UtilitiesInstructions,
         },
     };
 
@@ -204,7 +203,7 @@ pub mod tests {
         plonk::{Circuit, ConstraintSystem, Error},
     };
 
-    use rand::{rngs::OsRng, RngCore};
+    use rand::{RngCore, rngs::OsRng};
     use std::{convert::TryInto, iter, marker::PhantomData};
 
     const MERKLE_DEPTH: usize = 32;
@@ -366,7 +365,7 @@ pub mod tests {
                                 merkle_crh
                                     .hash(
                                         iter::empty()
-                                            .chain(i2lebsp::<10>(l as u64).iter().copied())
+                                            .chain(i2lebsp::<10>(u64::from(l)).iter().copied())
                                             .chain(
                                                 left.to_le_bits()
                                                     .iter()
@@ -417,7 +416,7 @@ pub mod tests {
         let circuit: MyMerkleCircuit<PallasLookupRangeCheckConfig> = generate_circuit();
 
         let prover = MockProver::run(11, &circuit, vec![]).unwrap();
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]
@@ -546,7 +545,7 @@ pub mod tests {
                                 merkle_crh
                                     .hash(
                                         iter::empty()
-                                            .chain(i2lebsp::<10>(l as u64).iter().copied())
+                                            .chain(i2lebsp::<10>(u64::from(l)).iter().copied())
                                             .chain(
                                                 left.to_le_bits()
                                                     .iter()
@@ -572,8 +571,8 @@ pub mod tests {
         }
     }
 
-    fn generate_circuit_4_5b<Lookup: PallasLookupRangeCheck>(
-    ) -> MyMerkleCircuitWithHashFromPrivatePoint<Lookup> {
+    fn generate_circuit_4_5b<Lookup: PallasLookupRangeCheck>()
+    -> MyMerkleCircuitWithHashFromPrivatePoint<Lookup> {
         let mut rng = OsRng;
 
         // Choose a random leaf and position
@@ -598,7 +597,7 @@ pub mod tests {
             generate_circuit_4_5b();
 
         let prover = MockProver::run(11, &circuit, vec![]).unwrap();
-        assert_eq!(prover.verify(), Ok(()))
+        assert_eq!(prover.verify(), Ok(()));
     }
 
     #[test]

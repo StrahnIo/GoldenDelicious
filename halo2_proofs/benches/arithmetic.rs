@@ -7,7 +7,7 @@ use crate::poly::commitment::Params;
 use group::ff::Field;
 use halo2_proofs::*;
 
-use criterion::{black_box, Criterion};
+use criterion::{Criterion, black_box};
 use rand_core::OsRng;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -28,7 +28,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 for (g_lo, g_hi) in g_lo.iter().zip(g_hi.iter()) {
                     small_multiexp(&[black_box(coeff_1), black_box(coeff_2)], &[*g_lo, *g_hi]);
                 }
-            })
+            });
         });
     }
 }

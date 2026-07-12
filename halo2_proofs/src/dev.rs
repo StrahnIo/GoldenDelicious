@@ -11,8 +11,8 @@ use crate::plonk::Assigned;
 use crate::{
     circuit,
     plonk::{
-        permutation, Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Error, Expression,
-        Fixed, FloorPlanner, Instance, Selector,
+        Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Error, Expression, Fixed,
+        FloorPlanner, Instance, Selector, permutation,
     },
 };
 
@@ -720,7 +720,7 @@ impl<F: Field + Ord> MockProver<F> {
                             &|query| {
                                 let query = self.cs.fixed_queries[query.index];
                                 let column_index = query.0.index();
-                                let rotation = query.1 .0;
+                                let rotation = query.1.0;
                                 self.fixed[column_index]
                                     [(row as i32 + n + rotation) as usize % n as usize]
                                     .into()
@@ -728,7 +728,7 @@ impl<F: Field + Ord> MockProver<F> {
                             &|query| {
                                 let query = self.cs.advice_queries[query.index];
                                 let column_index = query.0.index();
-                                let rotation = query.1 .0;
+                                let rotation = query.1.0;
                                 self.advice[column_index]
                                     [(row as i32 + n + rotation) as usize % n as usize]
                                     .into()
@@ -736,7 +736,7 @@ impl<F: Field + Ord> MockProver<F> {
                             &|query| {
                                 let query = self.cs.instance_queries[query.index];
                                 let column_index = query.0.index();
-                                let rotation = query.1 .0;
+                                let rotation = query.1.0;
                                 Value::Real(
                                     self.instance[column_index]
                                         [(row as i32 + n + rotation) as usize % n as usize]
@@ -777,11 +777,7 @@ impl<F: Field + Ord> MockProver<F> {
                                 .map(move |c| load(c, table_row))
                                 .collect();
 
-                            if t != fill_row {
-                                Some(t)
-                            } else {
-                                None
-                            }
+                            if t != fill_row { Some(t) } else { None }
                         })
                         .collect();
                     table.sort_unstable();

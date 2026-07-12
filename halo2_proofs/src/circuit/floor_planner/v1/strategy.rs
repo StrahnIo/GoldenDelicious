@@ -250,7 +250,7 @@ fn test_slot_in() {
             region_index: 0.into(),
             columns: vec![Column::new(0, Any::Advice), Column::new(1, Any::Advice)]
                 .into_iter()
-                .map(|a| a.into())
+                .map(std::convert::Into::into)
                 .collect(),
             row_count: 15,
         },
@@ -258,7 +258,7 @@ fn test_slot_in() {
             region_index: 1.into(),
             columns: vec![Column::new(2, Any::Advice)]
                 .into_iter()
-                .map(|a| a.into())
+                .map(std::convert::Into::into)
                 .collect(),
             row_count: 10,
         },
@@ -266,7 +266,7 @@ fn test_slot_in() {
             region_index: 2.into(),
             columns: vec![Column::new(2, Any::Advice), Column::new(0, Any::Advice)]
                 .into_iter()
-                .map(|a| a.into())
+                .map(std::convert::Into::into)
                 .collect(),
             row_count: 10,
         },

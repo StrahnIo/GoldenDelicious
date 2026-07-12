@@ -1,5 +1,5 @@
 use super::Params;
-use crate::arithmetic::{best_multiexp, CurveAffine};
+use crate::arithmetic::{CurveAffine, best_multiexp};
 use ff::Field;
 use group::Group;
 
@@ -35,7 +35,7 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
     /// Add another multiexp into this one
     pub fn add_msm(&mut self, other: &Self) {
-        for (x, (scalar, y)) in other.other.iter() {
+        for (x, (scalar, y)) in &other.other {
             self.other
                 .entry(*x)
                 .and_modify(|(our_scalar, our_y)| {
@@ -135,7 +135,7 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
     /// Perform multiexp and check that it results in zero
     pub fn eval(self) -> bool {
-        let len = self.g_scalars.as_ref().map(|v| v.len()).unwrap_or(0)
+        let len = self.g_scalars.as_ref().map(std::vec::Vec::len).unwrap_or(0)
             + self.w_scalar.map(|_| 1).unwrap_or(0)
             + self.u_scalar.map(|_| 1).unwrap_or(0)
             + self.other.len();
@@ -172,9 +172,9 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
 #[cfg(test)]
 mod tests {
-    use crate::poly::commitment::{Params, MSM};
+    use crate::poly::commitment::{MSM, Params};
     use group::Curve;
-    use pasta_curves::{arithmetic::CurveAffine, EpAffine, Fp, Fq};
+    use pasta_curves::{EpAffine, Fp, Fq, arithmetic::CurveAffine};
 
     #[test]
     fn msm_arithmetic() {

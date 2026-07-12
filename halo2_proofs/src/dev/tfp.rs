@@ -4,7 +4,7 @@ use ff::Field;
 use tracing::{debug, debug_span, span::EnteredSpan};
 
 use crate::{
-    circuit::{layouter::RegionLayouter, AssignedCell, Cell, Layouter, Region, Table, Value},
+    circuit::{AssignedCell, Cell, Layouter, Region, Table, Value, layouter::RegionLayouter},
     plonk::{
         Advice, Any, Assigned, Assignment, Circuit, Column, ConstraintSystem, Error, Fixed,
         FloorPlanner, Instance, Selector,
@@ -473,7 +473,7 @@ impl<'cs, F: Field, CS: Assignment<F>> Assignment<F> for TracingAssignment<'cs, 
         N: FnOnce() -> NR,
     {
         // We enter namespace spans in TracingLayouter.
-        self.cs.push_namespace(name_fn)
+        self.cs.push_namespace(name_fn);
     }
 
     fn pop_namespace(&mut self, gadget_name: Option<String>) {

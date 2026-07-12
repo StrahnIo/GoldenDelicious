@@ -3,8 +3,8 @@ use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     pasta::Fp,
     plonk::{
-        create_proof, keygen_pk, keygen_vk, verify_proof, Advice, Circuit, Column,
-        ConstraintSystem, Error, Instance, SingleVerifier,
+        Advice, Circuit, Column, ConstraintSystem, Error, Instance, SingleVerifier, create_proof,
+        keygen_pk, keygen_vk, verify_proof,
     },
     poly::commitment::Params,
     transcript::{Blake2bRead, Blake2bWrite, Challenge255},
@@ -12,13 +12,13 @@ use halo2_proofs::{
 use pasta_curves::{pallas, vesta};
 
 use halo2_gadgets::poseidon::{
-    primitives::{self as poseidon, generate_constants, ConstantLength, Mds, Spec},
     Hash, Pow5Chip, Pow5Config,
+    primitives::{self as poseidon, ConstantLength, Mds, Spec, generate_constants},
 };
 use std::convert::TryInto;
 use std::marker::PhantomData;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::rngs::OsRng;
 
 #[derive(Clone, Copy)]
@@ -89,7 +89,7 @@ where
                 let message_word = |i: usize| {
                     let value = self.message.map(|message_vals| message_vals[i]);
                     region.assign_advice(
-                        || format!("load message_{}", i),
+                        || format!("load message_{i}"),
                         config.input[i],
                         0,
                         || value,
@@ -183,8 +183,8 @@ fn bench_poseidon<S, const WIDTH: usize, const RATE: usize, const L: usize>(
                 &mut rng,
                 &mut transcript,
             )
-            .expect("proof generation should not fail")
-        })
+            .expect("proof generation should not fail");
+        });
     });
 
     // Create a proof
@@ -204,14 +204,16 @@ fn bench_poseidon<S, const WIDTH: usize, const RATE: usize, const L: usize>(
         b.iter(|| {
             let strategy = SingleVerifier::new(&params);
             let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-            assert!(verify_proof(
-                &params,
-                pk.get_vk(),
-                strategy,
-                &[&[&[output]]],
-                &mut transcript
-            )
-            .is_ok());
+            assert!(
+                verify_proof(
+                    &params,
+                    pk.get_vk(),
+                    strategy,
+                    &[&[&[output]]],
+                    &mut transcript
+                )
+                .is_ok()
+            );
         });
     });
 }

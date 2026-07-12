@@ -1,13 +1,13 @@
 use group::{
-    ff::{BatchInvert, Field},
     Curve,
+    ff::{BatchInvert, Field},
 };
 
 use super::super::Error;
-use super::{Params, MSM};
+use super::{MSM, Params};
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
-use crate::arithmetic::{best_multiexp, CurveAffine};
+use crate::arithmetic::{CurveAffine, best_multiexp};
 
 /// A guard returned by the verifier
 #[derive(Debug, Clone)]

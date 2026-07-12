@@ -4,7 +4,7 @@ use rand_core::RngCore;
 use super::super::{Coeff, Polynomial};
 use super::{Blind, Params};
 use crate::arithmetic::{
-    best_multiexp, compute_inner_product, eval_polynomial, parallelize, CurveAffine,
+    CurveAffine, best_multiexp, compute_inner_product, eval_polynomial, parallelize,
 };
 use crate::transcript::{EncodedChallenge, TranscriptWrite};
 

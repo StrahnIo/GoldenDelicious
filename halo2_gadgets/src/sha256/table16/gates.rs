@@ -18,11 +18,7 @@ impl<F: PrimeField> Gate<F> {
         let deg = points.len();
 
         fn factorial(n: u64) -> u64 {
-            if n < 2 {
-                1
-            } else {
-                n * factorial(n - 1)
-            }
+            if n < 2 { 1 } else { n * factorial(n - 1) }
         }
 
         // Scale the whole expression by factor to avoid divisions
@@ -43,7 +39,7 @@ impl<F: PrimeField> Gate<F> {
             for i in 0..deg {
                 let i = i as i32;
                 if i != idx {
-                    denom *= idx - i
+                    denom *= idx - i;
                 }
             }
             if denom < 0 {
@@ -55,7 +51,7 @@ impl<F: PrimeField> Gate<F> {
 
         let mut expr = Self::ones() * F::ZERO;
         for ((idx, _), eval) in points.iter().enumerate().zip(evals.iter()) {
-            expr = expr + numerator(var.clone(), *eval, idx as u64) * denominator(idx as i32)
+            expr = expr + numerator(var.clone(), *eval, idx as u64) * denominator(idx as i32);
         }
 
         (F::from(factor), expr)
@@ -64,7 +60,7 @@ impl<F: PrimeField> Gate<F> {
     pub fn range_check(value: Expression<F>, lower_range: u64, upper_range: u64) -> Expression<F> {
         let mut expr = Self::ones();
         for i in lower_range..(upper_range + 1) {
-            expr = expr * (Self::ones() * (-F::ONE) * F::from(i) + value.clone())
+            expr = expr * (Self::ones() * (-F::ONE) * F::from(i) + value.clone());
         }
         expr
     }

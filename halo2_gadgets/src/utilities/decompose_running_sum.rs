@@ -180,7 +180,7 @@ impl<F: PrimeFieldBits, const WINDOW_NUM_BITS: usize> RunningSumConfig<F, WINDOW
             // z_next = (z_cur - word) / (2^K)
             let z_next = {
                 let z_cur_val = z.value().copied();
-                let word = word.map(|word| F::from(word as u64));
+                let word = word.map(|word| F::from(u64::from(word)));
                 let z_next_val = (z_cur_val - word) * two_pow_k_inv;
                 region.assign_advice(
                     || format!("z_{:?}", i + 1),
@@ -236,11 +236,11 @@ mod tests {
         }
 
         impl<
-                F: PrimeFieldBits,
-                const WORD_NUM_BITS: usize,
-                const WINDOW_NUM_BITS: usize,
-                const NUM_WINDOWS: usize,
-            > Circuit<F> for MyCircuit<F, WORD_NUM_BITS, WINDOW_NUM_BITS, NUM_WINDOWS>
+            F: PrimeFieldBits,
+            const WORD_NUM_BITS: usize,
+            const WINDOW_NUM_BITS: usize,
+            const NUM_WINDOWS: usize,
+        > Circuit<F> for MyCircuit<F, WORD_NUM_BITS, WINDOW_NUM_BITS, NUM_WINDOWS>
         {
             type Config = RunningSumConfig<F, WINDOW_NUM_BITS>;
             type FloorPlanner = SimpleFloorPlanner;

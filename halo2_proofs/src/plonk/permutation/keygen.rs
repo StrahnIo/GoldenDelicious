@@ -1,6 +1,6 @@
 use group::{
-    ff::{Field, PrimeField},
     Curve,
+    ff::{Field, PrimeField},
 };
 
 use super::{Argument, ProvingKey, VerifyingKey};
@@ -8,8 +8,8 @@ use crate::{
     arithmetic::CurveAffine,
     plonk::{Any, Column, Error},
     poly::{
-        commitment::{Blind, Params},
         EvaluationDomain,
+        commitment::{Blind, Params},
     },
 };
 

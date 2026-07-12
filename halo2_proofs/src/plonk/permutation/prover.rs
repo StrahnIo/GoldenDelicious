@@ -1,20 +1,19 @@
 use group::{
-    ff::{BatchInvert, Field, PrimeField},
     Curve,
+    ff::{BatchInvert, Field, PrimeField},
 };
 use rand_core::RngCore;
 use std::iter::{self, ExactSizeIterator};
 
-use super::super::{circuit::Any, ChallengeBeta, ChallengeGamma, ChallengeX};
+use super::super::{ChallengeBeta, ChallengeGamma, ChallengeX, circuit::Any};
 use super::{Argument, ProvingKey};
 use crate::{
-    arithmetic::{eval_polynomial, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial, parallelize},
     plonk::{self, Error},
     poly::{
-        self,
+        self, Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
         commitment::{Blind, Params},
         multiopen::ProverQuery,
-        Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };
@@ -120,7 +119,7 @@ impl Argument {
 
             // Iterate over each column again, this time finishing the computation
             // of the entire fraction by computing the numerators
-            for &column in columns.iter() {
+            for &column in columns {
                 let omega = domain.get_omega();
                 let values = match column.column_type() {
                     Any::Advice => advice,

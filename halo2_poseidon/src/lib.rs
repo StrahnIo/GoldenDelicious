@@ -139,10 +139,13 @@ pub(crate) fn permute<F: Field, S: Spec<F, T, RATE>, const T: usize, const RATE:
         apply_mds(state);
     };
 
+    let full_round = &full_round as &dyn Fn(&mut State<F, T>, &[F; T]);
+    let part_round = &part_round as &dyn Fn(&mut State<F, T>, &[F; T]);
+
     iter::empty()
-        .chain(iter::repeat(&full_round as &dyn Fn(&mut State<F, T>, &[F; T])).take(r_f))
-        .chain(iter::repeat(&part_round as &dyn Fn(&mut State<F, T>, &[F; T])).take(r_p))
-        .chain(iter::repeat(&full_round as &dyn Fn(&mut State<F, T>, &[F; T])).take(r_f))
+        .chain(iter::repeat_n(full_round, r_f))
+        .chain(iter::repeat_n(part_round, r_p))
+        .chain(iter::repeat_n(full_round, r_f))
         .zip(round_constants.iter())
         .fold(state, |state, (round, rcs)| {
             round(state, rcs);
@@ -217,7 +220,7 @@ impl<F, const RATE: usize> Absorbing<F, RATE> {
     ///
     /// Returns the value if it was not absorbed because the sponge is full.
     pub fn absorb(&mut self, value: F) -> Result<(), F> {
-        for entry in self.0.iter_mut() {
+        for entry in &mut self.0 {
             if entry.is_none() {
                 *entry = Some(value);
                 return Ok(());
@@ -261,7 +264,7 @@ impl<F, const RATE: usize> Squeezing<F, RATE> {
     ///
     /// Returns `None` if the sponge is empty.
     pub fn squeeze(&mut self) -> Option<F> {
-        for entry in self.0.iter_mut() {
+        for entry in &mut self.0 {
             if let Some(inner) = entry.take() {
                 return Some(inner);
             }
@@ -308,7 +311,7 @@ impl<F: Field, S: Spec<F, T, RATE>, const T: usize, const RATE: usize>
 
     /// Absorbs an element into the sponge.
     pub(crate) fn absorb(&mut self, value: F) {
-        for entry in self.mode.0.iter_mut() {
+        for entry in &mut self.mode.0 {
             if entry.is_none() {
                 *entry = Some(value);
                 return;
@@ -350,7 +353,7 @@ impl<F: Field, S: Spec<F, T, RATE>, const T: usize, const RATE: usize>
     /// Squeezes an element from the sponge.
     pub(crate) fn squeeze(&mut self) -> F {
         loop {
-            for entry in self.mode.0.iter_mut() {
+            for entry in &mut self.mode.0 {
                 if let Some(e) = entry.take() {
                     return e;
                 }
@@ -392,7 +395,7 @@ impl<F: PrimeField, const RATE: usize, const L: usize> Domain<F, RATE> for Const
     type Padding = iter::Take<iter::Repeat<F>>;
 
     fn name() -> String {
-        format!("ConstantLength<{}>", L)
+        format!("ConstantLength<{L}>")
     }
 
     fn initial_capacity_element() -> F {
@@ -401,13 +404,17 @@ impl<F: PrimeField, const RATE: usize, const L: usize> Domain<F, RATE> for Const
         F::from_u128((L as u128) << 64)
     }
 
+    // `Self::Padding` is a public associated type that names this iterator concretely, so
+    // `repeat_n` (which would return `iter::RepeatN`) cannot be used without changing the
+    // public API.
+    #[allow(clippy::manual_repeat_n)]
     fn padding(input_len: usize) -> Self::Padding {
         assert_eq!(input_len, L);
         // For constant-input-length hashing, we pad the input with zeroes to a multiple
         // of RATE. On its own this would not be sponge-compliant padding, but the
         // Poseidon authors encode the constant length into the capacity element, ensuring
         // that inputs of different lengths do not share the same permutation.
-        let k = (L + RATE - 1) / RATE;
+        let k = L.div_ceil(RATE);
         iter::repeat(F::ZERO).take(k * RATE - L)
     }
 }
@@ -470,7 +477,7 @@ mod tests {
     use group::ff::PrimeField;
     use pasta_curves::pallas;
 
-    use super::{permute, ConstantLength, Hash, P128Pow5T3 as OrchardNullifier, Spec};
+    use super::{ConstantLength, Hash, P128Pow5T3 as OrchardNullifier, Spec, permute};
 
     #[test]
     fn orchard_spec_equivalence() {

@@ -3,15 +3,15 @@ use group::Curve;
 use std::iter;
 
 use super::{
-    vanishing, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error,
-    VerifyingKey,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error, VerifyingKey,
+    vanishing,
 };
 use crate::arithmetic::CurveAffine;
 use crate::poly::{
-    commitment::{Blind, Guard, Params, MSM},
+    commitment::{Blind, Guard, MSM, Params},
     multiopen::{self, VerifierQuery},
 };
-use crate::transcript::{read_n_points, read_n_scalars, EncodedChallenge, TranscriptRead};
+use crate::transcript::{EncodedChallenge, TranscriptRead, read_n_points, read_n_scalars};
 
 #[cfg(feature = "batch")]
 mod batch;
@@ -78,7 +78,7 @@ pub fn verify_proof<
     transcript: &mut T,
 ) -> Result<V::Output, Error> {
     // Check that instances matches the expected number of instance columns
-    for instances in instances.iter() {
+    for instances in instances {
         if instances.len() != vk.cs.num_instance_columns {
             return Err(Error::InvalidInstances);
         }
@@ -108,10 +108,10 @@ pub fn verify_proof<
     // Hash verification key into transcript
     vk.hash_into(transcript)?;
 
-    for instance_commitments in instance_commitments.iter() {
+    for instance_commitments in &instance_commitments {
         // Hash the instance (external) commitments into the transcript
         for commitment in instance_commitments {
-            transcript.common_point(*commitment)?
+            transcript.common_point(*commitment)?;
         }
     }
 

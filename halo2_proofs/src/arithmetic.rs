@@ -3,8 +3,8 @@
 
 pub use ff::Field;
 use group::{
-    ff::{BatchInvert, PrimeField},
     Group as _, GroupOpsOwned, ScalarMulOwned,
+    ff::{BatchInvert, PrimeField},
 };
 use maybe_rayon::prelude::*;
 pub use pasta_curves::arithmetic::*;
@@ -114,7 +114,7 @@ impl<C: CurveAffine> Buckets<C> {
 /// Performs a small multi-exponentiation operation.
 /// Uses the double-and-add algorithm with doublings shared across points.
 pub fn small_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
-    let coeffs: Vec<_> = coeffs.iter().map(|a| a.to_repr()).collect();
+    let coeffs: Vec<_> = coeffs.iter().map(ff::PrimeField::to_repr).collect();
     let mut acc = C::Curve::identity();
 
     // for byte idx
@@ -250,7 +250,7 @@ pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, 
             twiddle_chunk /= 2;
         }
     } else {
-        recursive_butterfly_arithmetic(a, n, 1, &twiddles)
+        recursive_butterfly_arithmetic(a, n, 1, &twiddles);
     }
 }
 

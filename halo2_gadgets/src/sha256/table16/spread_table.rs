@@ -1,4 +1,4 @@
-use super::{util::*, AssignedBits};
+use super::{AssignedBits, util::*};
 
 use group::ff::{Field, PrimeField};
 use halo2_proofs::{
@@ -89,7 +89,7 @@ impl<const DENSE: usize, const SPREAD: usize> SpreadVar<DENSE, SPREAD> {
             || "tag",
             cols.tag,
             row,
-            || tag.map(|tag| pallas::Base::from(tag as u64)),
+            || tag.map(|tag| pallas::Base::from(u64::from(tag))),
         )?;
 
         let dense =
@@ -290,7 +290,7 @@ impl SpreadTableConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_tag, SpreadTableChip, SpreadTableConfig};
+    use super::{SpreadTableChip, SpreadTableConfig, get_tag};
     use rand::Rng;
 
     use group::ff::PrimeField;
@@ -425,7 +425,7 @@ mod tests {
                         }
 
                         for _ in 0..10 {
-                            let word: u16 = rng.gen();
+                            let word: u16 = rng.r#gen();
                             add_row(
                                 F::from(u64::from(get_tag(word))),
                                 F::from(u64::from(word)),
@@ -443,7 +443,7 @@ mod tests {
 
         let prover = match MockProver::<Fp>::run(17, &circuit, vec![]) {
             Ok(prover) => prover,
-            Err(e) => panic!("{:?}", e),
+            Err(e) => panic!("{e:?}"),
         };
         assert_eq!(prover.verify(), Ok(()));
     }

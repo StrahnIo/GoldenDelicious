@@ -1,22 +1,21 @@
 use super::super::{
-    circuit::Expression, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, Error,
-    ProvingKey,
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, Error, ProvingKey,
+    circuit::Expression,
 };
 use super::Argument;
 use crate::{
-    arithmetic::{eval_polynomial, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial, parallelize},
     poly::{
-        self,
+        self, Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
         commitment::{Blind, Params},
         multiopen::ProverQuery,
-        Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };
 use ff::WithSmallOrderMulGroup;
 use group::{
-    ff::{BatchInvert, Field},
     Curve,
+    ff::{BatchInvert, Field},
 };
 use rand_core::RngCore;
 use std::{
@@ -614,7 +613,7 @@ fn permute_expression_pair<C: CurveAffine, R: RngCore>(
         .collect::<Result<Vec<_>, _>>()?;
 
     // Populate permuted table at unfilled rows with leftover table elements
-    for (coeff, count) in leftover_table_map.iter() {
+    for (coeff, count) in &leftover_table_map {
         for _ in 0..*count {
             permuted_table_coeffs[repeated_input_rows.pop().unwrap()] = *coeff;
         }

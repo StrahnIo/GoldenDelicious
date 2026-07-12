@@ -121,6 +121,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
                 let offset = 0;
 
                 // Decompose the scalar
+                #[allow(clippy::todo)]
                 let scalar = match scalar.running_sum {
                     None => self.decompose(
                         &mut region,
@@ -206,7 +207,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
         // tested at the circuit-level.
         {
             use super::super::FixedPoint;
-            use group::{ff::PrimeField, Curve};
+            use group::{Curve, ff::PrimeField};
 
             scalar
                 .magnitude
@@ -307,7 +308,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
 
 #[cfg(test)]
 pub mod tests {
-    use group::{ff::PrimeField, Curve, Group};
+    use group::{Curve, Group, ff::PrimeField};
     use halo2_proofs::{
         arithmetic::CurveAffine,
         circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner, Value},
@@ -319,16 +320,16 @@ pub mod tests {
 
     use crate::{
         ecc::{
+            CircuitVersion, FixedPointShort, NonIdentityPoint, Point, ScalarFixedShort,
             chip::{EccChip, EccConfig, FixedPoint, MagnitudeSign},
             tests::{Short, TestFixedBases},
-            CircuitVersion, FixedPointShort, NonIdentityPoint, Point, ScalarFixedShort,
         },
         utilities::{
+            UtilitiesInstructions,
             lookup_range_check::{
                 PallasLookupRangeCheck, PallasLookupRangeCheck4_5BConfig,
                 PallasLookupRangeCheckConfig,
             },
-            UtilitiesInstructions,
         },
     };
 
@@ -407,7 +408,7 @@ pub mod tests {
             ),
         ];
 
-        for (name, magnitude, sign) in magnitude_signs.iter() {
+        for (name, magnitude, sign) in &magnitude_signs {
             let (result, _) = {
                 let magnitude_sign = load_magnitude_sign(
                     chip.clone(),
@@ -446,7 +447,7 @@ pub mod tests {
             ("mul by -zero", pallas::Base::zero(), -pallas::Base::one()),
         ];
 
-        for (name, magnitude, sign) in zero_magnitude_signs.iter() {
+        for (name, magnitude, sign) in &zero_magnitude_signs {
             let (result, _) = {
                 let magnitude_sign = load_magnitude_sign(
                     chip.clone(),
@@ -576,11 +577,11 @@ pub mod tests {
             "-1".into()
         } else {
             // Format value as hex.
-            let s = format!("{:?}", v);
+            let s = format!("{v:?}");
             // Remove leading zeroes.
             let s = s.strip_prefix("0x").unwrap();
             let s = s.trim_start_matches('0');
-            format!("0x{}", s)
+            format!("0x{s}")
         }
     }
 
@@ -637,7 +638,7 @@ pub mod tests {
                     },
                 ];
 
-                for circuit in circuits.iter() {
+                for circuit in &circuits {
                     let prover = MockProver::<pallas::Base>::run(11, circuit, vec![]).unwrap();
                     circuit.magnitude_error.assert_if_known(|magnitude_error| {
                         assert_eq!(

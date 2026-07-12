@@ -59,8 +59,8 @@ impl<F: PrimeField> Grain<F> {
                 *state.get_mut(offset + len - 1 - i).unwrap() = (value >> i) & 1 != 0;
             }
         };
-        set_bits(0, 2, FieldType::PrimeOrder.tag() as u16);
-        set_bits(2, 4, sbox.tag() as u16);
+        set_bits(0, 2, u16::from(FieldType::PrimeOrder.tag()));
+        set_bits(2, 4, u16::from(sbox.tag()));
         set_bits(6, 12, F::NUM_BITS as u16);
         set_bits(18, 12, t);
         set_bits(30, 10, r_f);
@@ -84,13 +84,14 @@ impl<F: PrimeField> Grain<F> {
     fn load_next_8_bits(&mut self) {
         let mut new_bits = 0u8;
         for i in 0..8 {
-            new_bits |= ((self.state[i + 62]
-                ^ self.state[i + 51]
-                ^ self.state[i + 38]
-                ^ self.state[i + 23]
-                ^ self.state[i + 13]
-                ^ self.state[i]) as u8)
-                << i;
+            new_bits |= u8::from(
+                self.state[i + 62]
+                    ^ self.state[i + 51]
+                    ^ self.state[i + 38]
+                    ^ self.state[i + 23]
+                    ^ self.state[i + 13]
+                    ^ self.state[i],
+            ) << i;
         }
         self.state.rotate_left(8);
         self.next_bit -= 8;

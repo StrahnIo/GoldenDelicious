@@ -27,6 +27,9 @@ impl Spec<Fp, 3, 2> for P128Pow5T3 {
         val.pow_vartime([5])
     }
 
+    // `secure_mds` is only consulted when generating the MDS matrices. This spec supplies
+    // precomputed `constants()`, so it is never called.
+    #[allow(clippy::unimplemented)]
     fn secure_mds() -> usize {
         unimplemented!()
     }
@@ -53,6 +56,9 @@ impl Spec<Fq, 3, 2> for P128Pow5T3 {
         val.pow_vartime([5])
     }
 
+    // `secure_mds` is only consulted when generating the MDS matrices. This spec supplies
+    // precomputed `constants()`, so it is never called.
+    #[allow(clippy::unimplemented)]
     fn secure_mds() -> usize {
         unimplemented!()
     }
@@ -77,7 +83,7 @@ mod tests {
         super::{fp, fq},
         Fp, Fq,
     };
-    use crate::{generate_constants, permute, ConstantLength, Hash, Mds, Spec};
+    use crate::{ConstantLength, Hash, Mds, Spec, generate_constants, permute};
 
     /// The same Poseidon specification as poseidon::P128Pow5T3, but constructed
     /// such that its constants will be generated at runtime.

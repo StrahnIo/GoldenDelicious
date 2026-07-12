@@ -17,7 +17,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let coeffs = (0..(1 << k)).map(|_| Fp::random(OsRng)).collect::<Vec<_>>();
                 let bases = Params::<EqAffine>::new(k).get_g();
 
-                b.iter(|| best_multiexp(&coeffs, &bases))
+                b.iter(|| best_multiexp(&coeffs, &bases));
             })
             .sample_size(30);
     }

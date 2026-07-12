@@ -1,14 +1,14 @@
 use ff::Field;
 
 use super::super::{
-    commitment::{Guard, Params, MSM},
     Error,
+    commitment::{Guard, MSM, Params},
 };
 use super::{
-    construct_intermediate_sets, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
-    CommitmentReference, Query, VerifierQuery,
+    ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4, CommitmentReference, Query, VerifierQuery,
+    construct_intermediate_sets,
 };
-use crate::arithmetic::{eval_polynomial, lagrange_interpolate, CurveAffine};
+use crate::arithmetic::{CurveAffine, eval_polynomial, lagrange_interpolate};
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
 /// Verify a multi-opening proof
@@ -47,7 +47,7 @@ where
     // A vec of vecs of evals. The outer vec corresponds to the point set,
     // while the inner vec corresponds to the points in a particular set.
     let mut q_eval_sets = Vec::with_capacity(point_sets.len());
-    for point_set in point_sets.iter() {
+    for point_set in &point_sets {
         q_eval_sets.push(vec![C::Scalar::ZERO; point_set.len()]);
     }
 

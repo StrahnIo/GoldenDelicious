@@ -83,7 +83,7 @@ pub fn even_bits<const LEN: usize, const HALF: usize>(bits: [bool; LEN]) -> [boo
     assert_eq!(LEN % 2, 0);
     let mut even_bits = [false; HALF];
     for idx in 0..HALF {
-        even_bits[idx] = bits[idx * 2]
+        even_bits[idx] = bits[idx * 2];
     }
     even_bits
 }
@@ -93,7 +93,7 @@ pub fn odd_bits<const LEN: usize, const HALF: usize>(bits: [bool; LEN]) -> [bool
     assert_eq!(LEN % 2, 0);
     let mut odd_bits = [false; HALF];
     for idx in 0..HALF {
-        odd_bits[idx] = bits[idx * 2 + 1]
+        odd_bits[idx] = bits[idx * 2 + 1];
     }
     odd_bits
 }
@@ -101,8 +101,8 @@ pub fn odd_bits<const LEN: usize, const HALF: usize>(bits: [bool; LEN]) -> [bool
 /// Given a vector of words as vec![(lo: u16, hi: u16)], returns their sum: u32, along
 /// with a carry bit.
 pub fn sum_with_carry(words: Vec<(Value<u16>, Value<u16>)>) -> (Value<u32>, Value<u64>) {
-    let words_lo: Value<Vec<u64>> = words.iter().map(|(lo, _)| lo.map(|lo| lo as u64)).collect();
-    let words_hi: Value<Vec<u64>> = words.iter().map(|(_, hi)| hi.map(|hi| hi as u64)).collect();
+    let words_lo: Value<Vec<u64>> = words.iter().map(|(lo, _)| lo.map(u64::from)).collect();
+    let words_hi: Value<Vec<u64>> = words.iter().map(|(_, hi)| hi.map(u64::from)).collect();
 
     let sum: Value<u64> = {
         let sum_lo: Value<u64> = words_lo.map(|vec| vec.iter().sum());

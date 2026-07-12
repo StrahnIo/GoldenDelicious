@@ -1,4 +1,4 @@
-use super::super::{EccPoint, EccScalarFixed, FixedPoints, FIXED_BASE_WINDOW_SIZE, H, NUM_WINDOWS};
+use super::super::{EccPoint, EccScalarFixed, FIXED_BASE_WINDOW_SIZE, FixedPoints, H, NUM_WINDOWS};
 
 use crate::utilities::{decompose_word, range_check};
 use arrayvec::ArrayVec;
@@ -93,7 +93,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
             .map(|windows| {
                 windows
                     .into_iter()
-                    .map(|window| pallas::Base::from(window as u64))
+                    .map(|window| pallas::Base::from(u64::from(window)))
             })
             .transpose_vec(NUM_WINDOWS);
 
@@ -129,6 +129,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
                 let offset = 0;
 
                 // Lazily witness the scalar.
+                #[allow(clippy::todo)]
                 let scalar = match scalar.windows {
                     None => self.witness(&mut region, offset, scalar.value),
                     Some(_) => todo!("unimplemented for halo2_gadgets v0.1.0"),
@@ -179,7 +180,7 @@ impl<Fixed: FixedPoints<pallas::Affine>> Config<Fixed> {
 
 #[cfg(test)]
 pub mod tests {
-    use group::{ff::Field, Curve};
+    use group::{Curve, ff::Field};
     use halo2_proofs::{
         circuit::{Layouter, Value},
         plonk::Error,
@@ -189,9 +190,9 @@ pub mod tests {
 
     use crate::{
         ecc::{
+            FixedPoint, NonIdentityPoint, Point, ScalarFixed,
             chip::{EccChip, FixedPoint as _, H},
             tests::{FullWidth, TestFixedBases},
-            FixedPoint, NonIdentityPoint, Point, ScalarFixed,
         },
         utilities::lookup_range_check::PallasLookupRangeCheck,
     };
@@ -262,7 +263,7 @@ pub mod tests {
             let scalar_fixed = LAST_DOUBLING
                 .chars()
                 .fold(pallas::Scalar::zero(), |acc, c| {
-                    acc * &h + &pallas::Scalar::from(c.to_digit(8).unwrap() as u64)
+                    acc * &h + &pallas::Scalar::from(u64::from(c.to_digit(8).unwrap()))
                 });
             let by = ScalarFixed::new(
                 chip.clone(),

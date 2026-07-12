@@ -1,5 +1,5 @@
-use super::super::{util::*, AssignedBits, Bits, SpreadVar, SpreadWord, Table16Assignment};
-use super::{schedule_util::*, MessageScheduleConfig, MessageWord};
+use super::super::{AssignedBits, Bits, SpreadVar, SpreadWord, Table16Assignment, util::*};
+use super::{MessageScheduleConfig, MessageWord, schedule_util::*};
 use halo2_proofs::{
     circuit::{Region, Value},
     pasta::pallas,
@@ -27,11 +27,11 @@ impl Subregion3Word {
     }
 
     fn spread_b(&self) -> Value<[bool; 14]> {
-        self.b.value().map(|v| v.spread())
+        self.b.value().map(super::super::Bits::spread)
     }
 
     fn spread_c(&self) -> Value<[bool; 4]> {
-        self.c.value().map(|v| v.spread())
+        self.c.value().map(super::super::Bits::spread)
     }
 
     fn spread_d(&self) -> Value<[bool; 26]> {
@@ -48,7 +48,7 @@ impl Subregion3Word {
                     .iter()
                     .chain(c.iter())
                     .chain(d.iter())
-                    .chain(std::iter::repeat(&false).take(20))
+                    .chain(std::iter::repeat_n(&false, 20))
                     .copied()
                     .collect::<Vec<_>>();
 
@@ -168,13 +168,13 @@ impl MessageScheduleConfig {
 
             // Assign W_i, carry_i
             region.assign_advice(
-                || format!("W_{}", new_word_idx),
+                || format!("W_{new_word_idx}"),
                 a_5,
                 get_word_row(new_word_idx - 16) + 1,
-                || word.map(|word| pallas::Base::from(word as u64)),
+                || word.map(|word| pallas::Base::from(u64::from(word))),
             )?;
             region.assign_advice(
-                || format!("carry_{}", new_word_idx),
+                || format!("carry_{new_word_idx}"),
                 a_9,
                 get_word_row(new_word_idx - 16) + 1,
                 || carry.map(pallas::Base::from),

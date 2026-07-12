@@ -1,7 +1,7 @@
 use super::{
     super::DIGEST_SIZE,
+    AssignedBits, BlockWord, ROUNDS, STATE, SpreadInputs, SpreadVar, Table16Assignment,
     util::{i2lebsp, lebs2ip},
-    AssignedBits, BlockWord, SpreadInputs, SpreadVar, Table16Assignment, ROUNDS, STATE,
 };
 use halo2_proofs::{
     circuit::{Layouter, Value},
@@ -270,7 +270,7 @@ impl RoundWordDense {
         self.0
             .value_u16()
             .zip(self.1.value_u16())
-            .map(|(lo, hi)| lo as u32 + (1 << 16) * hi as u32)
+            .map(|(lo, hi)| u32::from(lo) + (1 << 16) * u32::from(hi))
     }
 }
 
@@ -288,7 +288,7 @@ impl RoundWordSpread {
         self.0
             .value_u32()
             .zip(self.1.value_u32())
-            .map(|(lo, hi)| lo as u64 + (1 << 32) * hi as u64)
+            .map(|(lo, hi)| u64::from(lo) + (1 << 32) * u64::from(hi))
     }
 }
 
@@ -938,7 +938,7 @@ impl CompressionConfig {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        super::BLOCK_SIZE, msg_schedule_test_input, BlockWord, Table16Chip, Table16Config, IV,
+        super::BLOCK_SIZE, BlockWord, IV, Table16Chip, Table16Config, msg_schedule_test_input,
     };
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
@@ -985,7 +985,7 @@ mod tests {
                 let digest = config.compression.digest(&mut layouter, state)?;
                 for (idx, digest_word) in digest.iter().enumerate() {
                     digest_word.0.assert_if_known(|digest_word| {
-                        (*digest_word as u64 + IV[idx] as u64) as u32
+                        (u64::from(*digest_word) + u64::from(IV[idx])) as u32
                             == super::compression_util::COMPRESSION_OUTPUT[idx]
                     });
                 }
@@ -998,7 +998,7 @@ mod tests {
 
         let prover = match MockProver::<pallas::Base>::run(17, &circuit, vec![]) {
             Ok(prover) => prover,
-            Err(e) => panic!("{:?}", e),
+            Err(e) => panic!("{e:?}"),
         };
         assert_eq!(prover.verify(), Ok(()));
     }

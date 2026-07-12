@@ -11,21 +11,20 @@ compile_error!(
     "The multicore feature flag is not supported on wasm32 architectures without atomics"
 );
 
-pub use maybe_rayon::{
-    iter::{IntoParallelIterator, ParallelIterator},
-    join, scope,
-};
+pub use maybe_rayon::{iter::IntoParallelIterator, join, scope};
 
+// `ParallelIterator` and `IndexedParallelIterator` are only consumed by the batch
+// verifier, and only when `multicore` is on, so re-export them under the same gate.
 #[cfg(feature = "multicore")]
-pub use maybe_rayon::{current_num_threads, iter::IndexedParallelIterator};
+pub use maybe_rayon::{
+    current_num_threads,
+    iter::{IndexedParallelIterator, ParallelIterator},
+};
 
 #[cfg(not(feature = "multicore"))]
 pub fn current_num_threads() -> usize {
     1
 }
-
-#[cfg(not(feature = "multicore"))]
-pub trait IndexedParallelIterator: std::iter::Iterator {}
 
 pub trait TryFoldAndReduce<T, E> {
     /// Implements `iter.try_fold().try_reduce()` for `rayon::iter::ParallelIterator`,

@@ -39,7 +39,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     /// values $j, k$.
     pub fn new(j: u32, k: u32) -> Self {
         // quotient_poly_degree * params.n - 1 is the degree of the quotient polynomial
-        let quotient_poly_degree = (j - 1) as u64;
+        let quotient_poly_degree = u64::from(j - 1);
 
         // n = 2^k
         let n = 1u64 << k;
@@ -412,7 +412,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         } else {
             point *= &self
                 .get_omega_inv()
-                .pow_vartime([(rotation.0 as i64).unsigned_abs()]);
+                .pow_vartime([i64::from(rotation.0).unsigned_abs()]);
         }
         point
     }

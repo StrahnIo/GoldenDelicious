@@ -5,3 +5,13 @@ members = [
     "halo2_poseidon",
     "halo2_proofs",
 ]
+
+resolver = "2"
+
+# Shared package metadata, so the edition and the MSRV cannot drift between crates.
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zcash/halo2"
+categories = ["cryptography"]

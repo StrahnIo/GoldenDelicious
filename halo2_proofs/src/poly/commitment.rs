@@ -4,11 +4,11 @@
 //! [halo]: https://eprint.iacr.org/2019/1021
 
 use super::{Coeff, LagrangeCoeff, Polynomial};
-use crate::arithmetic::{best_fft, best_multiexp, parallelize, CurveAffine, CurveExt};
+use crate::arithmetic::{CurveAffine, CurveExt, best_fft, best_multiexp, parallelize};
 use crate::helpers::CurveRead;
 
 use ff::{Field, PrimeField};
-use group::{prime::PrimeCurveAffine, Curve, Group};
+use group::{Curve, Group, prime::PrimeCurveAffine};
 use std::ops::{Add, AddAssign, Mul, MulAssign};
 
 mod msm;
@@ -17,7 +17,7 @@ mod verifier;
 
 pub use msm::MSM;
 pub use prover::create_proof;
-pub use verifier::{verify_proof, Accumulator, Guard};
+pub use verifier::{Accumulator, Guard, verify_proof};
 
 use std::io;
 
@@ -80,7 +80,7 @@ impl<C: CurveAffine> Params<C> {
         }
         let mut g_lagrange_projective = g_projective;
         best_fft(&mut g_lagrange_projective, alpha_inv, k);
-        let minv = C::Scalar::TWO_INV.pow_vartime([k as u64]);
+        let minv = C::Scalar::TWO_INV.pow_vartime([u64::from(k)]);
         parallelize(&mut g_lagrange_projective, |g, _| {
             for g in g.iter_mut() {
                 *g *= minv;
@@ -309,8 +309,8 @@ fn test_opening_proof() {
     use rand_core::OsRng;
 
     use super::{
-        commitment::{Blind, Params},
         EvaluationDomain,
+        commitment::{Blind, Params},
     };
     use crate::arithmetic::eval_polynomial;
     use crate::pasta::{EpAffine, Fq};

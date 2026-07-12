@@ -5,22 +5,21 @@ use std::iter;
 use std::ops::RangeTo;
 
 use super::{
+    ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error, ProvingKey,
     circuit::{
         Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner, Instance,
         Selector,
     },
-    lookup, permutation, vanishing, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX,
-    ChallengeY, Error, ProvingKey,
+    lookup, permutation, vanishing,
 };
 use crate::{
-    arithmetic::{eval_polynomial, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial},
     circuit::Value,
     plonk::Assigned,
     poly::{
-        self,
+        self, Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial,
         commitment::{Blind, Params},
         multiopen::{self, ProverQuery},
-        Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial,
     },
 };
 use crate::{
@@ -50,7 +49,7 @@ pub fn create_proof<
         return Err(Error::InvalidInstances);
     }
 
-    for instance in instances.iter() {
+    for instance in instances {
         if instance.len() != pk.vk.cs.num_instance_columns {
             return Err(Error::InvalidInstances);
         }
@@ -599,7 +598,7 @@ pub fn create_proof<
     let xn = x.pow([params.n, 0, 0, 0]);
 
     // Compute and hash instance evals for each circuit instance
-    for instance in instance.iter() {
+    for instance in &instance {
         // Evaluate polynomials at omega^i x
         let instance_evals: Vec<_> = meta
             .instance_queries
@@ -613,13 +612,13 @@ pub fn create_proof<
             .collect();
 
         // Hash each instance column evaluation
-        for eval in instance_evals.iter() {
+        for eval in &instance_evals {
             transcript.write_scalar(*eval)?;
         }
     }
 
     // Compute and hash advice evals for each circuit instance
-    for advice in advice.iter() {
+    for advice in &advice {
         // Evaluate polynomials at omega^i x
         let advice_evals: Vec<_> = meta
             .advice_queries
@@ -633,7 +632,7 @@ pub fn create_proof<
             .collect();
 
         // Hash each advice column evaluation
-        for eval in advice_evals.iter() {
+        for eval in &advice_evals {
             transcript.write_scalar(*eval)?;
         }
     }
@@ -648,7 +647,7 @@ pub fn create_proof<
         .collect();
 
     // Hash each fixed column evaluation
-    for eval in fixed_evals.iter() {
+    for eval in &fixed_evals {
         transcript.write_scalar(*eval)?;
     }
 

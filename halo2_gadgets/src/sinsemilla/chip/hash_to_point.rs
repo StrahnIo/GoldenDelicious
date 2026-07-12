@@ -2,7 +2,7 @@ use super::super::{CommitDomains, HashDomains, SinsemillaInstructions};
 use super::{NonIdentityEccPoint, SinsemillaChip};
 use crate::{
     ecc::FixedPoints,
-    sinsemilla::primitives::{self as sinsemilla, lebs2ip_k, INV_TWO_POW_K, SINSEMILLA_S},
+    sinsemilla::primitives::{self as sinsemilla, INV_TWO_POW_K, SINSEMILLA_S, lebs2ip_k},
     utilities::lookup_range_check::PallasLookupRangeCheck,
 };
 
@@ -406,7 +406,7 @@ where
 
             // We do not assign the final z_n as it is constrained to be zero.
             for (idx, word) in words[0..(words.len() - 1)].iter().enumerate() {
-                let word = word.map(|word| pallas::Base::from(word as u64));
+                let word = word.map(|word| pallas::Base::from(u64::from(word)));
                 // z_{i + 1} = (z_i - m_{i + 1}) / 2^K
                 z = (z - word) * inv_2_k;
                 let cell = region.assign_advice(
@@ -415,7 +415,7 @@ where
                     offset + idx + 1,
                     || z,
                 )?;
-                zs.push(cell)
+                zs.push(cell);
             }
 
             zs
@@ -426,9 +426,9 @@ where
 
         let generators = generators.transpose_vec(piece.num_words());
 
-        for (row, gen) in generators.iter().enumerate() {
-            let x_p = gen.map(|gen| gen.0);
-            let y_p = gen.map(|gen| gen.1);
+        for (row, r#gen) in generators.iter().enumerate() {
+            let x_p = r#gen.map(|r#gen| r#gen.0);
+            let y_p = r#gen.map(|r#gen| r#gen.1);
 
             // Assign `x_p`
             region.assign_advice(|| "x_p", config.double_and_add.x_p, offset + row, || x_p)?;
@@ -509,7 +509,7 @@ where
         {
             use crate::sinsemilla::primitives::{K, S_PERSONALIZATION};
 
-            use group::{prime::PrimeCurveAffine, Curve};
+            use group::{Curve, prime::PrimeCurveAffine};
             use pasta_curves::arithmetic::CurveExt;
 
             let field_elems: Value<Vec<_>> = message

@@ -325,14 +325,14 @@ impl Config {
 
 #[cfg(test)]
 pub mod tests {
-    use group::{prime::PrimeCurveAffine, Curve};
+    use group::{Curve, prime::PrimeCurveAffine};
     use halo2_proofs::{
         circuit::{Layouter, Value},
         plonk::Error,
     };
     use pasta_curves::{arithmetic::CurveExt, pallas};
 
-    use crate::ecc::{chip::EccPoint, EccInstructions, NonIdentityPoint};
+    use crate::ecc::{EccInstructions, NonIdentityPoint, chip::EccPoint};
 
     #[allow(clippy::too_many_arguments)]
     pub fn test_add<

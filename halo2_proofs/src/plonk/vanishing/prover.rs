@@ -6,13 +6,12 @@ use rand_core::RngCore;
 
 use super::Argument;
 use crate::{
-    arithmetic::{eval_polynomial, CurveAffine},
+    arithmetic::{CurveAffine, eval_polynomial},
     plonk::{ChallengeX, ChallengeY, Error},
     poly::{
-        self,
+        self, Coeff, EvaluationDomain, ExtendedLagrangeCoeff, Polynomial,
         commitment::{Blind, Params},
         multiopen::ProverQuery,
-        Coeff, EvaluationDomain, ExtendedLagrangeCoeff, Polynomial,
     },
     transcript::{EncodedChallenge, TranscriptWrite},
 };
@@ -109,7 +108,7 @@ impl<C: CurveAffine> Committed<C> {
         let h_commitments = h_commitments;
 
         // Hash each h(X) piece
-        for c in h_commitments.iter() {
+        for c in &h_commitments {
             transcript.write_point(*c)?;
         }
 

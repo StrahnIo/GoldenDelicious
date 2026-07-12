@@ -6,19 +6,19 @@ use ff::{Field, FromUniformBytes};
 use group::Curve;
 
 use super::{
+    Assigned, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
     circuit::{
         Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner, Instance,
         Selector,
     },
-    permutation, Assigned, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
+    permutation,
 };
 use crate::{
     arithmetic::CurveAffine,
     circuit::Value,
     poly::{
-        batch_invert_assigned,
+        EvaluationDomain, batch_invert_assigned,
         commitment::{Blind, Params},
-        EvaluationDomain,
     },
 };
 

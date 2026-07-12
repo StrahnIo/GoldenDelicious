@@ -1,6 +1,6 @@
 //! Gadget and chip for conditional swap and mux utilities.
 
-use super::{bool_check, ternary, UtilitiesInstructions};
+use super::{UtilitiesInstructions, bool_check, ternary};
 
 use crate::ecc::chip::{EccPoint, NonIdentityEccPoint};
 use group::ff::{Field, PrimeField};
@@ -103,7 +103,7 @@ impl<F: PrimeField> CondSwapInstructions<F> for CondSwapChip<F> {
                 let b = region.assign_advice(|| "witness b", config.b, 0, || pair.1)?;
 
                 // Witness `swap` value
-                let swap_val = swap.map(|swap| F::from(swap as u64));
+                let swap_val = swap.map(|swap| F::from(u64::from(swap)));
                 region.assign_advice(|| "swap", config.swap, 0, || swap_val)?;
 
                 // Conditionally swap a
@@ -298,11 +298,11 @@ impl<F: PrimeField> CondSwapChip<F> {
 #[cfg(test)]
 mod tests {
     use crate::utilities::{
+        UtilitiesInstructions,
         cond_swap::{CondSwapChip, CondSwapConfig, CondSwapInstructions},
         lookup_range_check::{
             PallasLookupRangeCheck, PallasLookupRangeCheck4_5BConfig, PallasLookupRangeCheckConfig,
         },
-        UtilitiesInstructions,
     };
     use group::ff::{Field, PrimeField};
     use halo2_proofs::{
@@ -404,18 +404,18 @@ mod tests {
     #[test]
     fn test_mux() {
         use crate::ecc::{
+            CircuitVersion, NonIdentityPoint, Point,
             chip::{EccChip, EccConfig},
             tests::TestFixedBases,
-            CircuitVersion, NonIdentityPoint, Point,
         };
 
-        use group::{cofactor::CofactorCurveAffine, Curve, Group};
+        use group::{Curve, Group, cofactor::CofactorCurveAffine};
         use halo2_proofs::{
             circuit::{Layouter, SimpleFloorPlanner, Value},
             dev::MockProver,
             plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance},
         };
-        use pasta_curves::{arithmetic::CurveAffine, pallas, EpAffine};
+        use pasta_curves::{EpAffine, arithmetic::CurveAffine, pallas};
 
         use rand::rngs::OsRng;
 
@@ -472,7 +472,7 @@ mod tests {
                     meta.advice_column(),
                 ];
 
-                for advice in advices.iter() {
+                for advice in &advices {
                     meta.enable_equality(*advice);
                 }
 

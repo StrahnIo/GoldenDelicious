@@ -181,7 +181,7 @@ where
 
     // Also construct inverse mapping from point_index to the point
     let mut inverse_point_index_map = BTreeMap::new();
-    for (&point, &point_index) in point_index_map.iter() {
+    for (&point, &point_index) in &point_index_map {
         inverse_point_index_map.insert(point_index, point);
     }
 
@@ -190,10 +190,10 @@ where
     // Also construct mapping from commitment to point_idx_set
     let mut commitment_set_map = IndexMap::new();
 
-    for (commitment, commitment_data) in commitment_map.iter_mut() {
+    for (commitment, commitment_data) in &mut commitment_map {
         let mut point_index_set = BTreeSet::new();
         // Note that point_index_set is ordered, unlike point_indices
-        for &point_index in commitment_data.point_indices.iter() {
+        for &point_index in &commitment_data.point_indices {
             point_index_set.insert(point_index);
         }
         let len = point_index_set.len();
@@ -265,8 +265,8 @@ where
 
     // Get actual points in each point set
     let mut point_sets: Vec<Vec<F>> = vec![Vec::new(); point_idx_sets.len()];
-    for (point_idx_set, &set_idx) in point_idx_sets.iter() {
-        for &point_idx in point_idx_set.iter() {
+    for (point_idx_set, &set_idx) in &point_idx_sets {
+        for &point_idx in point_idx_set {
             let point = inverse_point_index_map.get(&point_idx).unwrap();
             point_sets[set_idx].push(*point);
         }

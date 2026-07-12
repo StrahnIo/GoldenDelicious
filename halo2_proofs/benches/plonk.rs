@@ -5,7 +5,7 @@ use group::ff::Field;
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::pasta::{EqAffine, Fp};
 use halo2_proofs::plonk::*;
-use halo2_proofs::poly::{commitment::Params, Rotation};
+use halo2_proofs::poly::{Rotation, commitment::Params};
 use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
 use rand_core::OsRng;
 

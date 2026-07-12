@@ -194,12 +194,17 @@ pub fn decompose_word<F: PrimeFieldBits>(
         .to_le_bits()
         .into_iter()
         .take(word_num_bits)
-        .chain(std::iter::repeat(false).take(padding))
+        .chain(std::iter::repeat_n(false, padding))
         .collect();
     assert_eq!(bits.len(), word_num_bits + padding);
 
     bits.chunks_exact(window_num_bits)
-        .map(|chunk| chunk.iter().rev().fold(0, |acc, b| (acc << 1) + (*b as u8)))
+        .map(|chunk| {
+            chunk
+                .iter()
+                .rev()
+                .fold(0, |acc, b| (acc << 1) + u8::from(*b))
+        })
         .collect()
 }
 
@@ -303,7 +308,7 @@ mod tests {
                             || format!("witness {}", self.0),
                             config.advice,
                             0,
-                            || Value::known(pallas::Base::from(self.0 as u64)),
+                            || Value::known(pallas::Base::from(u64::from(self.0))),
                         )?;
 
                         Ok(())
@@ -337,6 +342,7 @@ mod tests {
 
     #[allow(clippy::assign_op_pattern)]
     #[allow(clippy::ptr_offset_with_cast)]
+    #[allow(clippy::manual_div_ceil)] // From `construct_uint!`.
     #[test]
     fn test_bitrange_subset() {
         let rng = OsRng;
@@ -365,7 +371,10 @@ mod tests {
         // and check that we recover the original.
         let decompose = |field_elem: pallas::Base, ranges: &[Range<usize>]| {
             assert_eq!(
-                ranges.iter().map(|range| range.len()).sum::<usize>(),
+                ranges
+                    .iter()
+                    .map(std::iter::ExactSizeIterator::len)
+                    .sum::<usize>(),
                 pallas::Base::NUM_BITS as usize
             );
             assert_eq!(ranges[0].start, 0);
@@ -444,7 +453,7 @@ mod tests {
             // Pad or truncate bits to 32 bytes
             let bits: Vec<bool> = bits.chain(iter::repeat(false)).take(32*8).collect();
 
-            let bytes: Vec<u8> = bits.chunks_exact(8).map(|chunk| chunk.iter().rev().fold(0, |acc, b| (acc << 1) + (*b as u8))).collect();
+            let bytes: Vec<u8> = bits.chunks_exact(8).map(|chunk| chunk.iter().rev().fold(0, |acc, b| (acc << 1) + u8::from(*b))).collect();
 
             // Check that original scalar is recovered from decomposition
             assert_eq!(scalar, pallas::Scalar::from_repr(bytes.try_into().unwrap()).unwrap());

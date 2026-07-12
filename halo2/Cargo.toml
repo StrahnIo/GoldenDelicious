@@ -4,14 +4,14 @@ version = "0.1.0-beta.2"
 authors = [
     "Jack Grigg <jack@electriccoin.co>",
 ]
-edition = "2021"
-rust-version = "1.60"
+edition.workspace = true
+rust-version.workspace = true
 description = "[BETA] Fast zero-knowledge proof-carrying data implementation with no trusted setup"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/zcash/halo2"
+license.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/halo2"
 readme = "../README.md"
-categories = ["cryptography"]
+categories.workspace = true
 keywords = ["halo", "proofs", "recursive", "zkp", "zkSNARKs"]
 
 [package.metadata.docs.rs]
@@ -23,3 +23,4 @@ halo2_proofs = { version = "0.3", path = "../halo2_proofs", default-features = f
 
 [lib]
 bench = false
+

@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use ff::FromUniformBytes;
 
-use super::{grain::Grain, Mds};
+use super::{Mds, grain::Grain};
 
 pub(super) fn generate_mds<F: FromUniformBytes<64> + Ord, const T: usize>(
     grain: &mut Grain<F>,
@@ -108,7 +108,7 @@ mod tests {
     use group::ff::Field;
     use pasta_curves::Fp;
 
-    use super::{generate_mds, Grain};
+    use super::{Grain, generate_mds};
 
     #[test]
     fn poseidon_mds() {

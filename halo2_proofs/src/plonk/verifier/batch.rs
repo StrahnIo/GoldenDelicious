@@ -2,11 +2,11 @@ use group::ff::{Field, FromUniformBytes};
 use pasta_curves::arithmetic::CurveAffine;
 use rand_core::OsRng;
 
-use super::{verify_proof, VerificationStrategy};
+use super::{VerificationStrategy, verify_proof};
 use crate::{
     multicore::{IntoParallelIterator, TryFoldAndReduce},
     plonk::{Error, VerifyingKey},
-    poly::commitment::{Guard, Params, MSM},
+    poly::commitment::{Guard, MSM, Params},
     transcript::{Blake2bRead, EncodedChallenge},
 };
 
@@ -62,7 +62,7 @@ impl<C: CurveAffine> BatchVerifier<C> {
 
     /// Adds a proof to the batch.
     pub fn add_proof(&mut self, instances: Vec<Vec<Vec<C::Scalar>>>, proof: Vec<u8>) {
-        self.items.push(BatchItem { instances, proof })
+        self.items.push(BatchItem { instances, proof });
     }
 }
 

@@ -35,7 +35,7 @@ impl<Fixed: FixedPoints<pallas::Affine>, Lookup: PallasLookupRangeCheck> Config<
         lookup_config: Lookup,
         super_config: super::Config<Fixed>,
     ) -> Self {
-        for advice in canon_advices.iter() {
+        for advice in &canon_advices {
             meta.enable_equality(*advice);
         }
 
@@ -47,7 +47,7 @@ impl<Fixed: FixedPoints<pallas::Affine>, Lookup: PallasLookupRangeCheck> Config<
         };
 
         let add_incomplete_advices = config.super_config.add_incomplete_config.advice_columns();
-        for canon_advice in config.canon_advices.iter() {
+        for canon_advice in &config.canon_advices {
             assert!(
                 !add_incomplete_advices.contains(canon_advice),
                 "Deconflict canon_advice columns with incomplete addition columns."
@@ -381,8 +381,8 @@ impl<Fixed: FixedPoints<pallas::Affine>, Lookup: PallasLookupRangeCheck> Config<
 #[cfg(test)]
 pub mod tests {
     use group::{
-        ff::{Field, PrimeField},
         Curve,
+        ff::{Field, PrimeField},
     };
     use halo2_proofs::{
         circuit::{Chip, Layouter, Value},
@@ -393,11 +393,11 @@ pub mod tests {
 
     use crate::{
         ecc::{
+            FixedPointBaseField, NonIdentityPoint, Point,
             chip::{EccChip, FixedPoint, H},
             tests::{BaseField, TestFixedBases},
-            FixedPointBaseField, NonIdentityPoint, Point,
         },
-        utilities::{lookup_range_check::PallasLookupRangeCheck, UtilitiesInstructions},
+        utilities::{UtilitiesInstructions, lookup_range_check::PallasLookupRangeCheck},
     };
 
     pub(crate) fn test_mul_fixed_base_field<Lookup: PallasLookupRangeCheck>(
@@ -469,7 +469,7 @@ pub mod tests {
             let scalar_fixed = "1333333333333333333333333333333333333333333333333333333333333333333333333333333333334"
                         .chars()
                         .fold(pallas::Base::zero(), |acc, c| {
-                            acc * &h + &pallas::Base::from(c.to_digit(8).unwrap() as u64)
+                            acc * &h + &pallas::Base::from(u64::from(c.to_digit(8).unwrap()))
                         });
             let result = {
                 let scalar_fixed = chip.load_private(

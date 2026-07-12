@@ -4,9 +4,9 @@ use ff::Field;
 
 use crate::{
     circuit::{
-        layouter::{RegionColumn, RegionLayouter, RegionShape},
-        table_layouter::{compute_table_lengths, SimpleTableLayouter},
         Cell, Layouter, Region, RegionIndex, RegionStart, Table, TableLayouter, Value,
+        layouter::{RegionColumn, RegionLayouter, RegionShape},
+        table_layouter::{SimpleTableLayouter, compute_table_lengths},
     },
     plonk::{
         Advice, Any, Assigned, Assignment, Circuit, Column, Error, Fixed, FloorPlanner, Instance,
@@ -82,7 +82,7 @@ impl FloorPlanner for V1 {
         // - Determine how many rows our planned circuit will require.
         let first_unassigned_row = column_allocations
             .values()
-            .map(|a| a.unbounded_interval_start())
+            .map(strategy::Allocations::unbounded_interval_start)
             .max()
             .unwrap_or(0);
 

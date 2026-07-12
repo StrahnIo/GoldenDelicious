@@ -101,8 +101,8 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a> TableLayouter<F>
                 return Err(Error::TableError(TableError::OverwriteDefault(
                     column,
                     format!("{:?}", entry.0.unwrap()),
-                    format!("{:?}", value),
-                )))
+                    format!("{value:?}"),
+                )));
             }
             _ => (),
         }

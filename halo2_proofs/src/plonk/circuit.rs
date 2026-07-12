@@ -6,7 +6,7 @@ use std::{
     ops::{Neg, Sub},
 };
 
-use super::{lookup, permutation, Assigned, Error};
+use super::{Assigned, Error, lookup, permutation};
 use crate::{
     circuit::{Layouter, Region, Value},
     poly::Rotation,
@@ -93,12 +93,12 @@ impl Ord for Any {
             | (Any::Advice, Any::Advice)
             | (Any::Fixed, Any::Fixed) => std::cmp::Ordering::Equal,
             // Across column types, sort Instance < Advice < Fixed.
-            (Any::Instance, Any::Advice)
-            | (Any::Advice, Any::Fixed)
-            | (Any::Instance, Any::Fixed) => std::cmp::Ordering::Less,
-            (Any::Fixed, Any::Instance)
-            | (Any::Fixed, Any::Advice)
-            | (Any::Advice, Any::Instance) => std::cmp::Ordering::Greater,
+            (Any::Instance, Any::Advice | Any::Fixed) | (Any::Advice, Any::Fixed) => {
+                std::cmp::Ordering::Less
+            }
+            (Any::Fixed | Any::Advice, Any::Instance) | (Any::Fixed, Any::Advice) => {
+                std::cmp::Ordering::Greater
+            }
         }
     }
 }
@@ -330,7 +330,7 @@ impl TableColumn {
 
     /// Enable equality on this TableColumn.
     pub fn enable_equality<F: Field>(&self, meta: &mut ConstraintSystem<F>) {
-        meta.enable_equality(self.inner)
+        meta.enable_equality(self.inner);
     }
 }
 
@@ -729,9 +729,10 @@ impl<F: Field> Neg for Expression<F> {
 impl<F: Field> Add for Expression<F> {
     type Output = Expression<F>;
     fn add(self, rhs: Expression<F>) -> Expression<F> {
-        if self.contains_simple_selector() || rhs.contains_simple_selector() {
-            panic!("attempted to use a simple selector in an addition");
-        }
+        assert!(
+            !(self.contains_simple_selector() || rhs.contains_simple_selector()),
+            "attempted to use a simple selector in an addition"
+        );
         Expression::Sum(Box::new(self), Box::new(rhs))
     }
 }
@@ -739,9 +740,10 @@ impl<F: Field> Add for Expression<F> {
 impl<F: Field> Sub for Expression<F> {
     type Output = Expression<F>;
     fn sub(self, rhs: Expression<F>) -> Expression<F> {
-        if self.contains_simple_selector() || rhs.contains_simple_selector() {
-            panic!("attempted to use a simple selector in a subtraction");
-        }
+        assert!(
+            !(self.contains_simple_selector() || rhs.contains_simple_selector()),
+            "attempted to use a simple selector in a subtraction"
+        );
         Expression::Sum(Box::new(self), Box::new(-rhs))
     }
 }
@@ -749,9 +751,10 @@ impl<F: Field> Sub for Expression<F> {
 impl<F: Field> Mul for Expression<F> {
     type Output = Expression<F>;
     fn mul(self, rhs: Expression<F>) -> Expression<F> {
-        if self.contains_simple_selector() && rhs.contains_simple_selector() {
-            panic!("attempted to multiply two expressions containing simple selectors");
-        }
+        assert!(
+            !(self.contains_simple_selector() && rhs.contains_simple_selector()),
+            "attempted to multiply two expressions containing simple selectors"
+        );
         Expression::Product(Box::new(self), Box::new(rhs))
     }
 }
@@ -1061,9 +1064,10 @@ impl<F: Field> ConstraintSystem<F> {
         let table_map = table_map(&mut cells)
             .into_iter()
             .map(|(input, table)| {
-                if input.contains_simple_selector() {
-                    panic!("expression containing simple selector supplied to lookup argument");
-                }
+                assert!(
+                    !input.contains_simple_selector(),
+                    "expression containing simple selector supplied to lookup argument"
+                );
 
                 let table = cells.query_fixed(table.inner());
 
@@ -1204,7 +1208,7 @@ impl<F: Field> ConstraintSystem<F> {
 
         let (constraint_names, polys): (_, Vec<_>) = constraints
             .into_iter()
-            .map(|c| c.into())
+            .map(std::convert::Into::into)
             .map(|c| (c.name, c.poly))
             .unzip();
 
@@ -1406,7 +1410,7 @@ impl<F: Field> ConstraintSystem<F> {
             degree,
             self.lookups
                 .iter()
-                .map(|l| l.required_degree())
+                .map(super::lookup::Argument::required_degree)
                 .max()
                 .unwrap_or(1),
         );
@@ -1417,7 +1421,7 @@ impl<F: Field> ConstraintSystem<F> {
             degree,
             self.gates
                 .iter()
-                .flat_map(|gate| gate.polynomials().iter().map(|poly| poly.degree()))
+                .flat_map(|gate| gate.polynomials().iter().map(Expression::degree))
                 .max()
                 .unwrap_or(0),
         );
@@ -1531,9 +1535,10 @@ impl<'a, F: Field> VirtualCells<'a, F> {
         match column.column_type() {
             Any::Advice => self.query_advice(Column::<Advice>::try_from(column).unwrap(), at),
             Any::Fixed => {
-                if at != Rotation::cur() {
-                    panic!("Fixed columns can only be queried at the current rotation");
-                }
+                assert!(
+                    !(at != Rotation::cur()),
+                    "Fixed columns can only be queried at the current rotation"
+                );
                 self.query_fixed(Column::<Fixed>::try_from(column).unwrap())
             }
             Any::Instance => self.query_instance(Column::<Instance>::try_from(column).unwrap(), at),

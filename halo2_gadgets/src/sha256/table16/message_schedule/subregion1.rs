@@ -1,5 +1,5 @@
-use super::super::{util::*, AssignedBits, BlockWord, SpreadVar, SpreadWord, Table16Assignment};
-use super::{schedule_util::*, MessageScheduleConfig};
+use super::super::{AssignedBits, BlockWord, SpreadVar, SpreadWord, Table16Assignment, util::*};
+use super::{MessageScheduleConfig, schedule_util::*};
 use halo2_proofs::{
     circuit::{Region, Value},
     pasta::pallas,
@@ -22,11 +22,11 @@ pub struct Subregion1Word {
 
 impl Subregion1Word {
     fn spread_a(&self) -> Value<[bool; 6]> {
-        self.a.value().map(|v| v.spread())
+        self.a.value().map(super::super::Bits::spread)
     }
 
     fn spread_b(&self) -> Value<[bool; 8]> {
-        self.b.value().map(|v| v.spread())
+        self.b.value().map(super::super::Bits::spread)
     }
 
     fn spread_c(&self) -> Value<[bool; 22]> {
@@ -47,7 +47,7 @@ impl Subregion1Word {
                     .iter()
                     .chain(c.iter())
                     .chain(d.iter())
-                    .chain(std::iter::repeat(&false).take(6))
+                    .chain(std::iter::repeat_n(&false, 6))
                     .copied()
                     .collect::<Vec<_>>();
                 let xor_1 = c

@@ -1,4 +1,4 @@
-use super::{add, CircuitVersion, EccPoint, NonIdentityEccPoint, ScalarVar, T_Q};
+use super::{CircuitVersion, EccPoint, NonIdentityEccPoint, ScalarVar, T_Q, add};
 use crate::utilities::{
     lookup_range_check::{PallasLookupRangeCheck, PallasLookupRangeCheckConfig},
     {bool_check, ternary},
@@ -337,7 +337,7 @@ impl<Lookup: PallasLookupRangeCheck> Config<Lookup> {
         // Assign z_0 = 2⋅z_1 + k_0
         let z_0 = {
             let z_0_val = z_1.value().zip(lsb).map(|(z_1, lsb)| {
-                let lsb = pallas::Base::from(lsb as u64);
+                let lsb = pallas::Base::from(u64::from(lsb));
                 z_1 * pallas::Base::from(2) + lsb
             });
             let z_0_cell = region.assign_advice(
@@ -421,6 +421,7 @@ impl<F: Field> Deref for Z<F> {
 // https://p.z.cash/halo2-0.1:ecc-var-mul-witness-scalar?partial
 #[allow(clippy::assign_op_pattern)]
 #[allow(clippy::ptr_offset_with_cast)]
+#[allow(clippy::manual_div_ceil)] // From `construct_uint!`.
 fn decompose_for_scalar_mul(scalar: Value<&pallas::Base>) -> Vec<Value<bool>> {
     construct_uint! {
         struct U256(4);
@@ -460,8 +461,8 @@ fn decompose_for_scalar_mul(scalar: Value<&pallas::Base>) -> Vec<Value<bool>> {
 #[cfg(test)]
 pub mod tests {
     use group::{
-        ff::{Field, PrimeField},
         Curve,
+        ff::{Field, PrimeField},
     };
     use halo2_proofs::{
         circuit::{Chip, Layouter, Value},
@@ -472,11 +473,11 @@ pub mod tests {
 
     use crate::{
         ecc::{
+            EccInstructions, NonIdentityPoint, Point, ScalarVar,
             chip::{EccChip, EccPoint},
             tests::TestFixedBases,
-            EccInstructions, NonIdentityPoint, Point, ScalarVar,
         },
-        utilities::{lookup_range_check::PallasLookupRangeCheck, UtilitiesInstructions},
+        utilities::{UtilitiesInstructions, lookup_range_check::PallasLookupRangeCheck},
     };
 
     pub(crate) fn test_mul<Lookup: PallasLookupRangeCheck>(
@@ -596,13 +597,13 @@ pub mod tests {
     mod base_anchoring {
         use crate::{
             ecc::{
+                CircuitVersion, NonIdentityPoint, ScalarVar,
                 chip::{EccChip, EccConfig},
                 tests::TestFixedBases,
-                CircuitVersion, NonIdentityPoint, ScalarVar,
             },
             utilities::{
-                lookup_range_check::{LookupRangeCheck, PallasLookupRangeCheckConfig},
                 UtilitiesInstructions,
+                lookup_range_check::{LookupRangeCheck, PallasLookupRangeCheckConfig},
             },
         };
         use group::{Curve, Group};

@@ -7,16 +7,16 @@ authors = [
     "Daira Emma Hopwood <daira@jacaranda.org>",
     "Jack Grigg <jack@electriccoin.co>",
 ]
-edition = "2021"
-rust-version = "1.60"
+edition.workspace = true
+rust-version.workspace = true
 description = """
 Fast PLONK-based zero-knowledge proving system with no trusted setup
 """
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/zcash/halo2"
+license.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/halo2_proofs"
 readme = "README.md"
-categories = ["cryptography"]
+categories.workspace = true
 keywords = ["halo", "proofs", "zkp", "zkSNARKs"]
 
 [package.metadata.docs.rs]
@@ -110,3 +110,4 @@ bench = false
 [[example]]
 name = "circuit-layout"
 required-features = ["test-dev-graph"]
+
