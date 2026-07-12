@@ -6,7 +6,15 @@ members = [
     "halo2_proofs",
 ]
 
-resolver = "2"
+# Pinned to the resolver this workspace has always used, rather than the one the
+# edition implies. Resolver 2 stops unifying features across normal and dev/build
+# dependencies, and this workspace relies on that unification: without it,
+# `rand_core/getrandom` is no longer enabled for the dev targets (so `OsRng` loses its
+# `RngCore` impl) and `getrandom/js` is no longer enabled for wasm32-unknown-unknown
+# (so that target stops building). Migrating to resolver 2 means declaring those
+# features explicitly, which is a dependency change rather than a toolchain one; it is
+# left for its own PR.
+resolver = "1"
 
 # Shared package metadata, so the edition and the MSRV cannot drift between crates.
 [workspace.package]

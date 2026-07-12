@@ -462,7 +462,10 @@ mod tests {
 
     #[test]
     fn lebs2ip_round_trip() {
-        use rand::rngs::OsRng;
+        // `RngCore` is imported explicitly because `proptest::prelude::*` (glob-imported
+        // by this module) also brings a `RngCore` into scope, and `next_u64` has to
+        // resolve against `rand`'s.
+        use rand::{RngCore, rngs::OsRng};
 
         let mut rng = OsRng;
         {

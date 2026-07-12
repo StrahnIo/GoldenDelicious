@@ -254,9 +254,12 @@ jobs:
         with:
           fail_ci_if_error: false
 
-  # Run with nightly and `RUSTDOCFLAGS` to emulate the docs.rs render as closely as
-  # possible. Requires `rustdoc::broken_intra_doc_links = "deny"` (set in
-  # `[workspace.lints]`).
+  # Requires `rustdoc::broken_intra_doc_links = "deny"` (set in `[workspace.lints]`).
+  #
+  # This runs on the pinned toolchain rather than nightly (which is what would emulate
+  # the docs.rs render): some of this workspace's older dependencies no longer compile
+  # on current nightly, so a nightly rustdoc job would fail on them rather than on
+  # anything in this repository.
   doc-links:
     name: Intra-doc links
     runs-on: ubuntu-latest
@@ -266,14 +269,10 @@ jobs:
           persist-credentials: false
       - id: prepare
         uses: ./.github/actions/prepare
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master HEAD 2026-05-31
-        id: toolchain
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          toolchain: nightly
-      - run: rustup override set "${TOOLCHAIN}"
-        shell: sh
-        env:
-          TOOLCHAIN: ${{ steps.toolchain.outputs.name }}
+          shared-key: msrv
+          save-if: "false"
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
       - run: cargo fetch
       - name: Check intra-doc links
@@ -283,8 +282,6 @@ jobs:
           --workspace
           ${{ steps.prepare.outputs.feature-flags }}
           --document-private-items
-        env:
-          RUSTDOCFLAGS: -Z unstable-options --enable-index-page --cfg docsrs
 
   clippy:
     name: Clippy (MSRV)

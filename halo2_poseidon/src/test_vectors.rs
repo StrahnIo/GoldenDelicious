@@ -1,4 +1,7 @@
-//! Test vectors for [`OrchardNullifier`].
+//! Test vectors for the [`P128Pow5T3`] specification (the domain that Orchard uses for
+//! nullifier derivation, where it is known as `OrchardNullifier`).
+//!
+//! [`P128Pow5T3`]: crate::P128Pow5T3
 
 use alloc::vec::Vec;
 
