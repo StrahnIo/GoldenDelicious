@@ -6,6 +6,9 @@ and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- MSRV is now 1.88.0.
+- The crate now uses Rust edition 2024.
 
 ## [0.1.0] - 2024-12-16
 Initial release, extracted from `halo2_gadgets 0.3.0`. Includes minor changes
