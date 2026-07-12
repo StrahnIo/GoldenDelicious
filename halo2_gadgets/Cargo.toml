@@ -91,3 +91,5 @@ name = "sha256"
 harness = false
 required-features = ["unstable-sha256-gadget"]
 
+[lints]
+workspace = true

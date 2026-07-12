@@ -24,3 +24,5 @@ halo2_proofs = { version = "0.3", path = "../halo2_proofs", default-features = f
 [lib]
 bench = false
 
+[lints]
+workspace = true

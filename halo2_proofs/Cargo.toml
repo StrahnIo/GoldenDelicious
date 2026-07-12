@@ -111,3 +111,5 @@ bench = false
 name = "circuit-layout"
 required-features = ["test-dev-graph"]
 
+[lints]
+workspace = true

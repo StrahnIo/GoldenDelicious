@@ -23,3 +23,5 @@ pasta_curves = "0.5"
 [features]
 test-dependencies = []
 
+[lints]
+workspace = true
