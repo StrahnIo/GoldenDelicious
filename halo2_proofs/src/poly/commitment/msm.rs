@@ -134,7 +134,11 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
     }
 
     /// Perform multiexp and check that it results in zero
-    pub fn eval(self) -> bool {
+    pub fn eval(self) -> bool
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
         let len = self.g_scalars.as_ref().map(|v| v.len()).unwrap_or(0)
             + self.w_scalar.map(|_| 1).unwrap_or(0)
             + self.u_scalar.map(|_| 1).unwrap_or(0)
@@ -165,6 +169,16 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
         }
 
         assert_eq!(scalars.len(), len);
+
+        #[cfg(feature = "fuji")]
+        if self.params.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::amx_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
+                    return bool::from(result.is_identity());
+                }
+            }
+        }
 
         bool::from(best_multiexp(&scalars, &bases).is_identity())
     }

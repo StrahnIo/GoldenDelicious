@@ -1,123 +1,89 @@
 use crate::arithmetic::CurveAffine;
+use ff::PrimeField;
 use fuji::FujiCurve;
-use fuji_pasta::{FujiField, PallasTag, VestaTag};
 use group::Group;
+use std::any::TypeId;
 
 /// Returns `true` if the AMX coprocessor is available at runtime.
 pub fn amx_available() -> bool {
     fuji::detection::amx_available()
 }
 
-/// Fuji-accelerated multi-scalar multiplication for Pallas (EpAffine).
-pub fn best_multiexp_fuji_pallas(
-    coeffs: &[pasta_curves::Fq],
-    bases: &[pasta_curves::EpAffine],
-) -> Option<pasta_curves::Ep> {
+/// Determine the FujiCurve from the scalar field type.
+fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
+    if TypeId::of::<S>() == TypeId::of::<pasta_curves::Fq>() {
+        Some(FujiCurve::Pallas)
+    } else if TypeId::of::<S>() == TypeId::of::<pasta_curves::Fp>() {
+        Some(FujiCurve::Vesta)
+    } else {
+        None
+    }
+}
+
+fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
+    let repr = s.to_repr();
+    let bytes: &[u8] = repr.as_ref();
+    let mut buf = [0u8; 32];
+    buf[..bytes.len()].copy_from_slice(bytes);
+    fuji::FujiField::from_bytes(&buf)
+}
+
+/// Try to compute a multi-scalar multiplication using Fuji's AMX backend.
+///
+/// Returns `None` if AMX is unavailable, the input is too small,
+/// or the curve type is not supported.
+pub fn try_multiexp<C>(
+    coeffs: &[C::Scalar],
+    bases: &[C],
+) -> Option<C::Curve>
+where
+    C: CurveAffine,
+    C::Scalar: PrimeField,
+    C::Base: PrimeField,
+{
+    let curve = curve_for_scalar::<C::Scalar>()?;
     if !amx_available() || coeffs.len() < 64 || coeffs.len() != bases.len() {
         return None;
     }
 
-    let (fuji_bases, fuji_scalars) = convert_pallas(coeffs, bases);
-    let result = fuji::msm::msm_eval(&fuji_bases, &fuji_scalars, FujiCurve::Pallas).ok()?;
-    Some(fuji_point_to_ep(result))
-}
-
-/// Fuji-accelerated multi-scalar multiplication for Vesta (EqAffine).
-pub fn best_multiexp_fuji_vesta(
-    coeffs: &[pasta_curves::Fp],
-    bases: &[pasta_curves::EqAffine],
-) -> Option<pasta_curves::Eq> {
-    if !amx_available() || coeffs.len() < 64 || coeffs.len() != bases.len() {
-        return None;
-    }
-
-    let (fuji_bases, fuji_scalars) = convert_vesta(coeffs, bases);
-    let result = fuji::msm::msm_eval(&fuji_bases, &fuji_scalars, FujiCurve::Vesta).ok()?;
-    Some(fuji_point_to_eq(result))
-}
-
-fn convert_pallas(
-    coeffs: &[pasta_curves::Fq],
-    bases: &[pasta_curves::EpAffine],
-) -> (Vec<fuji::FujiAffine>, Vec<fuji::FujiField>) {
     let fuji_scalars: Vec<fuji::FujiField> = coeffs
         .iter()
-        .map(|s| {
-            let tagged: FujiField<VestaTag> = (*s).into();
-            tagged.into_inner()
-        })
+        .map(field_to_fuji)
         .collect();
 
     let fuji_bases: Vec<fuji::FujiAffine> = bases
         .iter()
         .map(|b| {
             let coords = b.coordinates().unwrap();
-            let x_tagged: FujiField<PallasTag> = (*coords.x()).into();
-            let y_tagged: FujiField<PallasTag> = (*coords.y()).into();
-            fuji::FujiAffine::from_coordinates(x_tagged.into_inner(), y_tagged.into_inner())
+            let x = field_to_fuji(coords.x());
+            let y = field_to_fuji(coords.y());
+            fuji::FujiAffine::from_coordinates(x, y)
         })
         .collect();
 
-    (fuji_bases, fuji_scalars)
+    let result = fuji::msm::msm_eval(&fuji_bases, &fuji_scalars, curve).ok()?;
+    Some(fuji_point_to_curve::<C>(result, curve))
 }
 
-fn convert_vesta(
-    coeffs: &[pasta_curves::Fp],
-    bases: &[pasta_curves::EqAffine],
-) -> (Vec<fuji::FujiAffine>, Vec<fuji::FujiField>) {
-    let fuji_scalars: Vec<fuji::FujiField> = coeffs
-        .iter()
-        .map(|s| {
-            let tagged: FujiField<PallasTag> = (*s).into();
-            tagged.into_inner()
-        })
-        .collect();
-
-    let fuji_bases: Vec<fuji::FujiAffine> = bases
-        .iter()
-        .map(|b| {
-            let coords = b.coordinates().unwrap();
-            let x_tagged: FujiField<VestaTag> = (*coords.x()).into();
-            let y_tagged: FujiField<VestaTag> = (*coords.y()).into();
-            fuji::FujiAffine::from_coordinates(x_tagged.into_inner(), y_tagged.into_inner())
-        })
-        .collect();
-
-    (fuji_bases, fuji_scalars)
-}
-
-fn fuji_point_to_ep(pt: fuji::FujiPoint) -> pasta_curves::Ep {
+/// Convert a FujiPoint back to a curve's projective point.
+fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
+where
+    C: CurveAffine,
+    C::Base: PrimeField,
+{
     if pt.is_identity() {
-        return pasta_curves::Ep::identity();
+        return C::Curve::identity();
     }
-    let curve = FujiCurve::Pallas;
     let affine = pt.to_affine(curve).unwrap();
-    let x_fp: pasta_curves::Fp = {
-        let tagged: FujiField<PallasTag> = (*affine.x()).into();
-        tagged.into()
-    };
-    let y_fp: pasta_curves::Fp = {
-        let tagged: FujiField<PallasTag> = (*affine.y()).into();
-        tagged.into()
-    };
-    let aff = pasta_curves::EpAffine::from_xy(x_fp, y_fp).unwrap();
-    pasta_curves::Ep::from(&aff)
+    let x = C::Base::from_repr(bytes_to_repr::<C::Base>(&affine.x().to_bytes())).unwrap();
+    let y = C::Base::from_repr(bytes_to_repr::<C::Base>(&affine.y().to_bytes())).unwrap();
+    let aff = C::from_xy(x, y).unwrap();
+    aff.into()
 }
 
-fn fuji_point_to_eq(pt: fuji::FujiPoint) -> pasta_curves::Eq {
-    if pt.is_identity() {
-        return pasta_curves::Eq::identity();
-    }
-    let curve = FujiCurve::Vesta;
-    let affine = pt.to_affine(curve).unwrap();
-    let x_fq: pasta_curves::Fq = {
-        let tagged: FujiField<VestaTag> = (*affine.x()).into();
-        tagged.into()
-    };
-    let y_fq: pasta_curves::Fq = {
-        let tagged: FujiField<VestaTag> = (*affine.y()).into();
-        tagged.into()
-    };
-    let aff = pasta_curves::EqAffine::from_xy(x_fq, y_fq).unwrap();
-    pasta_curves::Eq::from(&aff)
+fn bytes_to_repr<S: PrimeField>(bytes: &[u8; 32]) -> S::Repr {
+    let mut repr = S::Repr::default();
+    let dst: &mut [u8] = repr.as_mut();
+    dst.copy_from_slice(bytes);
+    repr
 }

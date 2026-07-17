@@ -2,7 +2,7 @@
 //! field and polynomial arithmetic.
 
 #[cfg(feature = "fuji")]
-mod fuji;
+pub(crate) mod fuji;
 
 pub use ff::Field;
 use group::{
