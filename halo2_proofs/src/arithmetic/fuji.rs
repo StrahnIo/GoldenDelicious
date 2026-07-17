@@ -15,6 +15,17 @@ fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
     }
 }
 
+/// Ensure AMX detection runs once before any MSM call.
+/// The C library's `msm_eval` internally consults this, and will fall
+/// back to a slow scalar path if detection hasn't been seeded.
+pub(crate) fn ensure_amx_detected() {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    DETECTED.get_or_init(|| {
+        fuji::detection::amx_available()
+    });
+}
+
 pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
     let repr = s.to_repr();
     let bytes: &[u8] = repr.as_ref();
@@ -43,6 +54,9 @@ where
     if coeffs.len() < 64 || coeffs.len() != bases.len() {
         return None;
     }
+
+    // Probe AMX once so the C library uses the fast path.
+    ensure_amx_detected();
 
     let fuji_scalars: Vec<fuji::FujiField> = coeffs
         .iter()
@@ -92,6 +106,9 @@ where
     if total < 64 || total != bases.len() || total != scalars.len() {
         return None;
     }
+
+    // Probe AMX once so the C library uses the fast path.
+    ensure_amx_detected();
 
     let fuji_scalars: Vec<fuji::FujiField> = scalars.iter().map(field_to_fuji).collect();
 
