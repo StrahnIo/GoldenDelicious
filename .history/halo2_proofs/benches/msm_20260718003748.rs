@@ -2,7 +2,7 @@
 extern crate criterion;
 
 use crate::arithmetic::best_multiexp;
-use crate::pasta::{EpAffine, Fq};
+use crate::pasta::{EqAffine, Fp};
 use crate::poly::commitment::Params;
 use criterion::{BenchmarkId, Criterion};
 use group::ff::Field;
@@ -14,8 +14,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     for k in 8..13 {
         group
             .bench_function(BenchmarkId::new("k", k), |b| {
-                let coeffs = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect::<Vec<_>>();
-                let bases = Params::<EpAffine>::new(k).get_g();
+                let coeffs = (0..(1 << k)).map(|_| Fp::random(OsRng)).collect::<Vec<_>>();
+                let bases = Params::<EqAffine>::new(k).get_g();
 
                 b.iter(|| best_multiexp(&coeffs, &bases))
             })
@@ -32,8 +32,8 @@ fn fuji_benchmark(c: &mut Criterion) {
     for k in 8..13 {
         group
             .bench_function(BenchmarkId::new("k", k), |b| {
-                let coeffs = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect::<Vec<_>>();
-                let bases = Params::<EpAffine>::new(k).get_g();
+                let coeffs = (0..(1 << k)).map(|_| Fp::random(OsRng)).collect::<Vec<_>>();
+                let bases = Params::<EqAffine>::new(k).get_g();
 
                 let fuji_scalars: Vec<_> = coeffs
                     .iter()
@@ -65,7 +65,7 @@ fn fuji_benchmark(c: &mut Criterion) {
                     fuji::msm::msm_eval(
                         &fuji_bases,
                         &fuji_scalars,
-                        fuji::FujiCurve::Pallas,
+                        fuji::FujiCurve::Vesta,
                     )
                     .unwrap()
                 })
