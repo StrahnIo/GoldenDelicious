@@ -114,7 +114,7 @@ where
 }
 
 /// Convert a FujiPoint back to a curve's projective point.
-fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
+fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, _curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,
     C::Base: PrimeField,
@@ -122,7 +122,7 @@ where
     if pt.is_identity() {
         return C::Curve::identity();
     }
-    let affine = pt.to_affine(curve).unwrap();
+    let affine = pt.to_affine().unwrap();
     let x = C::Base::from_repr(bytes_to_repr::<C::Base>(&affine.x().to_bytes())).unwrap();
     let y = C::Base::from_repr(bytes_to_repr::<C::Base>(&affine.y().to_bytes())).unwrap();
     let aff = C::from_xy(x, y).unwrap();
