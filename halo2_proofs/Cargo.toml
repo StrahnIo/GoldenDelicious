@@ -110,6 +110,7 @@ nightly = [
 # Add flags for in-development features above this line.
 
 [lib]
+crate-type = ["rlib", "dylib", "staticlib"]
 bench = false
 
 [[example]]
