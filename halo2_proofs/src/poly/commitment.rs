@@ -116,7 +116,11 @@ impl<C: CurveAffine> Params<C> {
     /// This computes a commitment to a polynomial described by the provided
     /// slice of coefficients. The commitment will be blinded by the blinding
     /// factor `r`.
-    pub fn commit(&self, poly: &Polynomial<C::Scalar, Coeff>, r: Blind<C::Scalar>) -> C::Curve {
+    pub fn commit(&self, poly: &Polynomial<C::Scalar, Coeff>, r: Blind<C::Scalar>) -> C::Curve
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
         let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
         let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
 
@@ -125,6 +129,16 @@ impl<C: CurveAffine> Params<C> {
 
         tmp_bases.extend(self.g.iter());
         tmp_bases.push(self.w);
+
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::amx_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
 
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
     }
@@ -136,7 +150,11 @@ impl<C: CurveAffine> Params<C> {
         &self,
         poly: &Polynomial<C::Scalar, LagrangeCoeff>,
         r: Blind<C::Scalar>,
-    ) -> C::Curve {
+    ) -> C::Curve
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
         let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
         let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
 
@@ -145,6 +163,16 @@ impl<C: CurveAffine> Params<C> {
 
         tmp_bases.extend(self.g_lagrange.iter());
         tmp_bases.push(self.w);
+
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::amx_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
 
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
     }
