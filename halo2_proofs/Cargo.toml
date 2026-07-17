@@ -58,6 +58,10 @@ tracing = "0.1"
 blake2b_simd = "1"
 maybe-rayon = {version = "0.1.0", default-features = false}
 
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+fuji = { path = "../fuji/fuji", optional = true }
+fuji-pasta = { path = "../fuji/fuji-pasta", optional = true }
+
 # Developer tooling dependencies
 plotters = { version = "0.3.0", default-features = false, optional = true }
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
@@ -94,6 +98,7 @@ gadget-traces = ["backtrace"]
 sanity-checks = []
 batch = ["rand_core/getrandom"]
 floor-planner-v1-legacy-pdqsort = ["halo2_legacy_pdqsort"]
+fuji = ["dep:fuji", "dep:fuji-pasta"]
 
 # In-development features
 # See https://zcash.github.io/halo2/dev/features.html
