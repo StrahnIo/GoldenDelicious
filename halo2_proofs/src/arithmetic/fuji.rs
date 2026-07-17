@@ -4,11 +4,6 @@ use fuji::FujiCurve;
 use group::Group;
 use std::any::TypeId;
 
-/// Returns `true` if the AMX coprocessor is available at runtime.
-pub fn amx_available() -> bool {
-    fuji::detection::amx_available()
-}
-
 /// Determine the FujiCurve from the scalar field type.
 fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
     if TypeId::of::<S>() == TypeId::of::<pasta_curves::Fq>() {
@@ -30,8 +25,11 @@ pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
 
 /// Try to compute a multi-scalar multiplication using Fuji's AMX backend.
 ///
-/// Returns `None` if AMX is unavailable, the input is too small,
-/// or the curve type is not supported.
+/// Returns `None` if the input is too small, or the curve type is not supported.
+///
+/// # Note
+/// Requires the `fuji` feature and Apple Silicon. The C library falls back
+/// to a scalar implementation on unsupported processors.
 pub(crate) fn try_multiexp<C>(
     coeffs: &[C::Scalar],
     bases: &[C],
@@ -42,7 +40,7 @@ where
     C::Base: PrimeField,
 {
     let curve = curve_for_scalar::<C::Scalar>()?;
-    if !amx_available() || coeffs.len() < 64 || coeffs.len() != bases.len() {
+    if coeffs.len() < 64 || coeffs.len() != bases.len() {
         return None;
     }
 
@@ -70,8 +68,11 @@ where
 /// `counts` specifies the number of (scalar, base) pairs for each MSM.
 /// The total sum of `counts` must equal the length of `bases` and `scalars`.
 ///
-/// Returns `None` if AMX is unavailable, the total input is too small,
-/// or the curve type is not supported.
+/// Returns `None` if the total input is too small, or the curve type is not supported.
+///
+/// # Note
+/// Requires the `fuji` feature and Apple Silicon. The C library falls back
+/// to a scalar implementation on unsupported processors.
 pub(crate) fn try_batch_multiexp<C>(
     counts: &[i32],
     bases: &[C],
@@ -88,7 +89,7 @@ where
     }
 
     let curve = curve_for_scalar::<C::Scalar>()?;
-    if !amx_available() || total < 64 || total != bases.len() || total != scalars.len() {
+    if total < 64 || total != bases.len() || total != scalars.len() {
         return None;
     }
 

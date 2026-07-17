@@ -133,10 +133,8 @@ impl<C: CurveAffine> Params<C> {
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
-            if fuji::amx_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
-                    return result;
-                }
+            if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                return result;
             }
         }
 
@@ -176,13 +174,11 @@ impl<C: CurveAffine> Params<C> {
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
-            if fuji::amx_available() {
-                let counts: Vec<i32> = vec![per_msm as i32; polys.len()];
-                if let Some(results) =
-                    fuji::try_batch_multiexp::<C>(&counts, &all_bases, &all_scalars)
-                {
-                    return results;
-                }
+            let counts: Vec<i32> = vec![per_msm as i32; polys.len()];
+            if let Some(results) =
+                fuji::try_batch_multiexp::<C>(&counts, &all_bases, &all_scalars)
+            {
+                return results;
             }
         }
 
@@ -217,10 +213,8 @@ impl<C: CurveAffine> Params<C> {
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
-            if fuji::amx_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
-                    return result;
-                }
+            if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                return result;
             }
         }
 
@@ -260,13 +254,11 @@ impl<C: CurveAffine> Params<C> {
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
-            if fuji::amx_available() {
-                let counts: Vec<i32> = vec![per_msm as i32; polys.len()];
-                if let Some(results) =
-                    fuji::try_batch_multiexp::<C>(&counts, &all_bases, &all_scalars)
-                {
-                    return results;
-                }
+            let counts: Vec<i32> = vec![per_msm as i32; polys.len()];
+            if let Some(results) =
+                fuji::try_batch_multiexp::<C>(&counts, &all_bases, &all_scalars)
+            {
+                return results;
             }
         }
 

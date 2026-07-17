@@ -173,10 +173,8 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
         #[cfg(feature = "fuji")]
         if self.params.n >= 64 {
             use crate::arithmetic::fuji;
-            if fuji::amx_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
-                    return bool::from(result.is_identity());
-                }
+            if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
+                return bool::from(result.is_identity());
             }
         }
 

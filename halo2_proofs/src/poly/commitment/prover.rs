@@ -103,23 +103,20 @@ pub fn create_proof<
         // Compute L, R
         let batch_lr = (|| -> Option<(C::Curve, C::Curve)> {
             #[cfg(feature = "fuji")]
-            if params.n >= 64 {
+            if params.n >= 64 && half >= 64 {
                 use crate::arithmetic::fuji;
-                if fuji::amx_available() && half >= 64 {
-                    let batch_scalars: Vec<C::Scalar> = p_prime[half..]
-                        .iter()
-                        .chain(p_prime[0..half].iter())
-                        .copied()
-                        .collect();
-                    let results = fuji::try_batch_multiexp::<C>(
-                        &[half as i32, half as i32],
-                        &g_prime,
-                        &batch_scalars,
-                    )?;
-                    return Some((results[0], results[1]));
-                }
+                let batch_scalars: Vec<C::Scalar> = p_prime[half..]
+                    .iter()
+                    .chain(p_prime[0..half].iter())
+                    .copied()
+                    .collect();
+                let results = fuji::try_batch_multiexp::<C>(
+                    &[half as i32, half as i32],
+                    &g_prime,
+                    &batch_scalars,
+                )?;
+                return Some((results[0], results[1]));
             }
-            let _ = (&p_prime, &g_prime, half);
             None
         })();
 

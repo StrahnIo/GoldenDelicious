@@ -1,4 +1,12 @@
 //! # halo2_proofs
+//!
+//! ## Feature flags
+//!
+//! - **`fuji`** — Enables Apple Silicon AMX acceleration via the [`fuji`] library.
+//!   Requires Apple Silicon (M1–M4) and `DYLD_LIBRARY_PATH` pointing to
+//!   `libfuji.dylib`. The `fuji` feature performs no runtime processor detection;
+//!   it is the caller's responsibility to ensure the target is a compatible
+//!   Apple Silicon system.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The actual lints we want to disable.
