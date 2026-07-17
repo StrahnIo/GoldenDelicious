@@ -101,11 +101,23 @@ pub fn create_proof<
         let half = 1 << (params.k - j - 1); // half the length of `p_prime`, `b`, `G'`
 
         // Compute L, R
-        //
-        // TODO: If we modify multiexp to take "extra" bases, we could speed
-        // this piece up a bit by combining the multiexps.
-        let l_j = best_multiexp(&p_prime[half..], &g_prime[0..half]);
-        let r_j = best_multiexp(&p_prime[0..half], &g_prime[half..]);
+        let try_fuji = |coeffs: &[C::Scalar], bases: &[C]| -> Option<C::Curve> {
+            #[cfg(feature = "fuji")]
+            if params.n >= 64 {
+                use crate::arithmetic::fuji;
+                if fuji::amx_available() {
+                    return fuji::try_multiexp::<C>(coeffs, bases);
+                }
+            }
+            let _ = coeffs;
+            let _ = bases;
+            None
+        };
+
+        let l_j = try_fuji(&p_prime[half..], &g_prime[0..half])
+            .unwrap_or_else(|| best_multiexp(&p_prime[half..], &g_prime[0..half]));
+        let r_j = try_fuji(&p_prime[0..half], &g_prime[half..])
+            .unwrap_or_else(|| best_multiexp(&p_prime[0..half], &g_prime[half..]));
         let value_l_j = compute_inner_product(&p_prime[half..], &b[0..half]);
         let value_r_j = compute_inner_product(&p_prime[0..half], &b[half..]);
         let l_j_randomness = C::Scalar::random(&mut rng);
