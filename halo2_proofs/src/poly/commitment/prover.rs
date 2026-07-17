@@ -101,23 +101,34 @@ pub fn create_proof<
         let half = 1 << (params.k - j - 1); // half the length of `p_prime`, `b`, `G'`
 
         // Compute L, R
-        let try_fuji = |coeffs: &[C::Scalar], bases: &[C]| -> Option<C::Curve> {
+        let batch_lr = (|| -> Option<(C::Curve, C::Curve)> {
             #[cfg(feature = "fuji")]
             if params.n >= 64 {
                 use crate::arithmetic::fuji;
-                if fuji::amx_available() {
-                    return fuji::try_multiexp::<C>(coeffs, bases);
+                if fuji::amx_available() && half >= 64 {
+                    let batch_scalars: Vec<C::Scalar> = p_prime[half..]
+                        .iter()
+                        .chain(p_prime[0..half].iter())
+                        .copied()
+                        .collect();
+                    let results = fuji::try_batch_multiexp::<C>(
+                        &[half as i32, half as i32],
+                        &g_prime,
+                        &batch_scalars,
+                    )?;
+                    return Some((results[0], results[1]));
                 }
             }
-            let _ = coeffs;
-            let _ = bases;
+            let _ = (&p_prime, &g_prime, half);
             None
-        };
+        })();
 
-        let l_j = try_fuji(&p_prime[half..], &g_prime[0..half])
-            .unwrap_or_else(|| best_multiexp(&p_prime[half..], &g_prime[0..half]));
-        let r_j = try_fuji(&p_prime[0..half], &g_prime[half..])
-            .unwrap_or_else(|| best_multiexp(&p_prime[0..half], &g_prime[half..]));
+        let (l_j, r_j) = batch_lr.unwrap_or_else(|| {
+            (
+                best_multiexp(&p_prime[half..], &g_prime[0..half]),
+                best_multiexp(&p_prime[0..half], &g_prime[half..]),
+            )
+        });
         let value_l_j = compute_inner_product(&p_prime[half..], &b[0..half]);
         let value_r_j = compute_inner_product(&p_prime[0..half], &b[half..]);
         let l_j_randomness = C::Scalar::random(&mut rng);
