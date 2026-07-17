@@ -19,10 +19,10 @@ fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
 /// The C library's `msm_eval` internally consults this, and will fall
 /// back to a slow scalar path if detection hasn't been seeded.
 pub(crate) fn ensure_amx_detected() {
-    use std::sync::OnceLock;
-    static DETECTED: OnceLock<bool> = OnceLock::new();
-    DETECTED.get_or_init(|| {
-        fuji::detection::amx_available()
+    use std::sync::Once;
+    static DETECT: Once = Once::new();
+    DETECT.call_once(|| {
+        fuji::detection::amx_available();
     });
 }
 
