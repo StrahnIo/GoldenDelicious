@@ -177,6 +177,56 @@ impl<C: CurveAffine> Params<C> {
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
     }
 
+    /// Commits to multiple polynomials in Lagrange form in a single batch.
+    ///
+    /// Each polynomial is committed with its corresponding blinding factor.
+    /// Returns one commitment per polynomial.
+    pub fn commit_batch_lagrange(
+        &self,
+        polys: &[&Polynomial<C::Scalar, LagrangeCoeff>],
+        r: &[Blind<C::Scalar>],
+    ) -> Vec<C::Curve>
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
+        assert_eq!(polys.len(), r.len());
+        if polys.is_empty() {
+            return Vec::new();
+        }
+
+        let per_msm = (self.n as usize) + 1;
+
+        let mut all_scalars = Vec::with_capacity(polys.len() * per_msm);
+        let mut all_bases = Vec::with_capacity(polys.len() * per_msm);
+
+        for (&poly, blind) in polys.iter().zip(r.iter()) {
+            all_scalars.extend(poly.iter());
+            all_scalars.push(blind.0);
+            all_bases.extend(self.g_lagrange.iter());
+            all_bases.push(self.w);
+        }
+
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::amx_available() {
+                let counts: Vec<i32> = vec![per_msm as i32; polys.len()];
+                if let Some(results) =
+                    fuji::try_batch_multiexp::<C>(&counts, &all_bases, &all_scalars)
+                {
+                    return results;
+                }
+            }
+        }
+
+        polys
+            .iter()
+            .zip(r.iter())
+            .map(|(poly, blind)| self.commit_lagrange(poly, *blind))
+            .collect()
+    }
+
     /// Generates an empty multiscalar multiplication struct using the
     /// appropriate params.
     pub fn empty_msm(&self) -> MSM<'_, C> {
