@@ -20,7 +20,7 @@ fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
     }
 }
 
-fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
+pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
     let repr = s.to_repr();
     let bytes: &[u8] = repr.as_ref();
     let mut buf = [0u8; 32];
@@ -32,7 +32,7 @@ fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
 ///
 /// Returns `None` if AMX is unavailable, the input is too small,
 /// or the curve type is not supported.
-pub fn try_multiexp<C>(
+pub(crate) fn try_multiexp<C>(
     coeffs: &[C::Scalar],
     bases: &[C],
 ) -> Option<C::Curve>
