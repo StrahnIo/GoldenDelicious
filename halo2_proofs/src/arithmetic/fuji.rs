@@ -155,4 +155,101 @@ fn bytes_to_repr<S: PrimeField>(bytes: &[u8; 32]) -> S::Repr {
     repr
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arithmetic::best_multiexp;
+    use crate::pasta::{Ep, EpAffine, Fq};
+    use ff::{Field, PrimeField};
+    use group::{Curve, Group};
+    use rand_core::OsRng;
+
+    fn fuji_eval<C: CurveAffine>(bases: &[C], scalars: &[C::Scalar], curve: FujiCurve) -> Option<C::Curve>
+    where
+        C::Scalar: PrimeField,
+        C::Base: PrimeField,
+    {
+        let fb: Vec<_> = bases.iter().map(|b| {
+            let c = b.coordinates().unwrap();
+            fuji::FujiAffine::from_coordinates(field_to_fuji(c.x()), field_to_fuji(c.y()))
+        }).collect();
+        let fs: Vec<_> = scalars.iter().map(field_to_fuji).collect();
+        fuji::msm::msm_eval(&fb, &fs, curve).ok().map(|pt| fuji_point_to_curve::<C>(pt, curve))
+    }
+
+    fn fuji_batch<C: CurveAffine>(
+        counts: &[i32],
+        bases: &[C],
+        scalars: &[C::Scalar],
+        curve: FujiCurve,
+    ) -> Option<Vec<C::Curve>>
+    where
+        C::Scalar: PrimeField,
+        C::Base: PrimeField,
+    {
+        let fb: Vec<_> = bases.iter().map(|b| {
+            let c = b.coordinates().unwrap();
+            fuji::FujiAffine::from_coordinates(field_to_fuji(c.x()), field_to_fuji(c.y()))
+        }).collect();
+        let fs: Vec<_> = scalars.iter().map(field_to_fuji).collect();
+        fuji::msm::msm_batch(counts, &fb, &fs, curve).ok().map(|pts| {
+            pts.into_iter().map(|pt| fuji_point_to_curve::<C>(pt, curve)).collect()
+        })
+    }
+
+    fn ep_pt_eq(a: &Ep, b: &Ep) -> bool {
+        use group::Curve;
+        let a_aff = a.to_affine();
+        let b_aff = b.to_affine();
+        let ca = a_aff.coordinates();
+        let cb = b_aff.coordinates();
+        if bool::from(ca.is_some()) && bool::from(cb.is_some()) {
+            let ca = ca.unwrap();
+            let cb = cb.unwrap();
+            ca.x().to_repr() == cb.x().to_repr() && ca.y().to_repr() == cb.y().to_repr()
+        } else {
+            bool::from(ca.is_none()) && bool::from(cb.is_none())
+        }
+    }
+
+    #[test]
+    fn inner_product_batch_vs_single() {
+        let mut rng = OsRng;
+        let curve = FujiCurve::Pallas;
+
+        for &half in &[1, 2, 4, 8, 16, 32, 64] {
+            let total = half * 2;
+            let g_prime: Vec<EpAffine> = (0..total).map(|_| Ep::random(&mut rng).into()).collect();
+            let p_prime: Vec<Fq> = (0..total).map(|_| Fq::random(&mut rng)).collect();
+
+            // Software ground truth
+            let sw_l = best_multiexp(&p_prime[half..], &g_prime[0..half]);
+            let sw_r = best_multiexp(&p_prime[0..half], &g_prime[half..]);
+
+            // Two separate fuji_msm_eval calls
+            let f_l = fuji_eval::<EpAffine>(&g_prime[0..half], &p_prime[half..], curve);
+            let f_r = fuji_eval::<EpAffine>(&g_prime[half..], &p_prime[0..half], curve);
+
+            // One fuji_msm_batch call (inner product ordering)
+            let batch_scalars: Vec<Fq> = p_prime[half..].iter().chain(p_prime[0..half].iter()).copied().collect();
+            let batch = fuji_batch::<EpAffine>(&[half as i32, half as i32], &g_prime, &batch_scalars, curve);
+
+            let sw_l_ok = true;
+            let f_l_ok = f_l.is_some() && ep_pt_eq(&f_l.unwrap(), &sw_l);
+            let f_r_ok = f_r.is_some() && ep_pt_eq(&f_r.unwrap(), &sw_r);
+            let batch_ok = batch.as_ref().map_or(false, |b| {
+                b.len() == 2 && ep_pt_eq(&b[0], &sw_l) && ep_pt_eq(&b[1], &sw_r)
+            });
+
+            eprintln!("half={:>2}  sw=ok  two_eval=[{},{}]  batch=[{},{}]",
+                half,
+                if f_l_ok { "P" } else { "F" },
+                if f_r_ok { "P" } else { "F" },
+                if batch_ok { "P" } else { "F" },
+                if batch_ok { "P" } else { "F" },
+            );
+        }
+    }
+}
+
 
