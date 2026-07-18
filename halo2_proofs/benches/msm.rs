@@ -32,8 +32,9 @@ mod accelerated {
     use rand_core::OsRng;
 
     pub fn run(c: &mut Criterion) {
-        // Seed AMX detection once so the C library uses the AMX fast path.
+        // Seed AMX and SME detection once so the C library uses the fast path.
         fuji::detection::amx_available();
+        fuji::detection::sme_available();
 
         let mut group = c.benchmark_group("msm-fuji");
         for k in 8..13 {

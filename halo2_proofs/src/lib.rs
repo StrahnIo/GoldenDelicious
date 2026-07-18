@@ -2,9 +2,10 @@
 //!
 //! ## Feature flags
 //!
-//! - **`fuji`** — Enables Apple Silicon AMX acceleration via the [`fuji`] library.
+//! - **`fuji`** — Enables Apple Silicon AMX/SME acceleration via the [`fuji`] library.
 //!   Requires Apple Silicon (M1–M4) and `DYLD_LIBRARY_PATH` pointing to
-//!   `libfuji.dylib`. The `fuji` feature performs no runtime processor detection;
+//!   `libfuji.dylib`. Uses AMX on M1–M4 and additionally detects SME on M4+.
+//!   The `fuji` feature performs no runtime processor detection;
 //!   it is the caller's responsibility to ensure the target is a compatible
 //!   Apple Silicon system.
 

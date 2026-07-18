@@ -15,14 +15,17 @@ fn curve_for_scalar<S: 'static>() -> Option<FujiCurve> {
     }
 }
 
-/// Ensure AMX detection runs once before any MSM call.
-/// The C library's `msm_eval` internally consults this, and will fall
-/// back to a slow scalar path if detection hasn't been seeded.
-pub(crate) fn ensure_amx_detected() {
+/// Seed hardware detection (AMX + SME) once before any MSM call.
+///
+/// The C library's `msm_eval` internally consults AMX/SME availability
+/// and will fall back or abort if detection hasn't been seeded.
+/// SME is available on Apple M4+ via `fuji_sme_available()`.
+pub(crate) fn ensure_hardware_detected() {
     use std::sync::Once;
     static DETECT: Once = Once::new();
     DETECT.call_once(|| {
         fuji::detection::amx_available();
+        fuji::detection::sme_available();
     });
 }
 
@@ -34,13 +37,12 @@ pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
     fuji::FujiField::from_bytes(&buf)
 }
 
-/// Try to compute a multi-scalar multiplication using Fuji's AMX backend.
+/// Try to compute a multi-scalar multiplication using Fuji's AMX/SME backend.
 ///
 /// Returns `None` if the input is too small, or the curve type is not supported.
 ///
 /// # Note
-/// Requires the `fuji` feature and Apple Silicon. The C library falls back
-/// to a scalar implementation on unsupported processors.
+/// Requires the `fuji` feature and Apple Silicon (M1+ for AMX, M4+ for SME).
 pub(crate) fn try_multiexp<C>(
     coeffs: &[C::Scalar],
     bases: &[C],
@@ -56,7 +58,7 @@ where
     }
 
     // Probe AMX once so the C library uses the fast path.
-    ensure_amx_detected();
+    ensure_hardware_detected();
 
     let fuji_scalars: Vec<fuji::FujiField> = coeffs
         .iter()
@@ -77,7 +79,7 @@ where
     Some(fuji_point_to_curve::<C>(result, curve))
 }
 
-/// Try to compute a batch of multi-scalar multiplications using Fuji's AMX backend.
+/// Try to compute a batch of multi-scalar multiplications using Fuji's AMX/SME backend.
 ///
 /// `counts` specifies the number of (scalar, base) pairs for each MSM.
 /// The total sum of `counts` must equal the length of `bases` and `scalars`.
@@ -85,8 +87,7 @@ where
 /// Returns `None` if the total input is too small, or the curve type is not supported.
 ///
 /// # Note
-/// Requires the `fuji` feature and Apple Silicon. The C library falls back
-/// to a scalar implementation on unsupported processors.
+/// Requires the `fuji` feature and Apple Silicon (M1+ for AMX, M4+ for SME).
 pub(crate) fn try_batch_multiexp<C>(
     counts: &[i32],
     bases: &[C],
@@ -108,7 +109,7 @@ where
     }
 
     // Probe AMX once so the C library uses the fast path.
-    ensure_amx_detected();
+    ensure_hardware_detected();
 
     let fuji_scalars: Vec<fuji::FujiField> = scalars.iter().map(field_to_fuji).collect();
 
