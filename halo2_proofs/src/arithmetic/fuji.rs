@@ -133,36 +133,24 @@ where
 
 /// Convert a FujiPoint back to a curve's projective point.
 ///
-/// Performs Jacobian-to-affine conversion using the base field type directly
-/// (avoiding FujiField arithmetic, which may have subtle incompatibilities).
-fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, _curve: FujiCurve) -> C::Curve
+/// Uses `fuji_pt_to_affine` with the correct curve parameter so the proper
+/// field modulus is used for the Jacobian-to-affine inversion.
+fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,
     C::Base: PrimeField,
 {
-    use ff::Field;
-
     if pt.is_identity() {
         return C::Curve::identity();
     }
 
-    let x_bytes = pt.x_limbs();
-    let y_bytes = pt.y_limbs();
-    let z_bytes = pt.z_limbs();
-
-    let x = C::Base::from_repr(bytes_to_repr::<C::Base>(x_bytes)).unwrap();
-    let y = C::Base::from_repr(bytes_to_repr::<C::Base>(y_bytes)).unwrap();
-    let z = C::Base::from_repr(bytes_to_repr::<C::Base>(z_bytes)).unwrap();
-
-    // Jacobian → affine: (X/Z², Y/Z³)
-    let z_inv = z.invert().unwrap();
-    let z_inv_sq = z_inv.square();
-    let z_inv_cu = z_inv_sq * z_inv;
-    let x_aff = x * z_inv_sq;
-    let y_aff = y * z_inv_cu;
-
-    let aff = C::from_xy(x_aff, y_aff).unwrap();
-    aff.into()
+    let aff = pt.to_affine(curve).unwrap();
+    let x_bytes = aff.x().to_bytes();
+    let y_bytes = aff.y().to_bytes();
+    let x = C::Base::from_repr(bytes_to_repr::<C::Base>(&x_bytes)).unwrap();
+    let y = C::Base::from_repr(bytes_to_repr::<C::Base>(&y_bytes)).unwrap();
+    let affine = C::from_xy(x, y).unwrap();
+    affine.into()
 }
 
 fn bytes_to_repr<S: PrimeField>(bytes: &[u8; 32]) -> S::Repr {
