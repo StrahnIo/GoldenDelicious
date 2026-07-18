@@ -1,4 +1,12 @@
 //! # halo2_proofs
+//!
+//! ## Feature flags
+//!
+//! - **`fuji`** — Enables Apple Silicon SME detection via the [`fuji`] library.
+//!   Reserved for future SME-accelerated MSM dispatch. Field arithmetic and
+//!   multi-scalar multiplication use Rust NEON Montgomery (`pasta_curves`).
+//!   Requires Apple Silicon (M4+) and `DYLD_LIBRARY_PATH` pointing to
+//!   `libfuji.dylib`.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The actual lints we want to disable.

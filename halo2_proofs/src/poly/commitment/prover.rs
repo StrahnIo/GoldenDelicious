@@ -101,9 +101,6 @@ pub fn create_proof<
         let half = 1 << (params.k - j - 1); // half the length of `p_prime`, `b`, `G'`
 
         // Compute L, R
-        //
-        // TODO: If we modify multiexp to take "extra" bases, we could speed
-        // this piece up a bit by combining the multiexps.
         let l_j = best_multiexp(&p_prime[half..], &g_prime[0..half]);
         let r_j = best_multiexp(&p_prime[0..half], &g_prime[half..]);
         let value_l_j = compute_inner_product(&p_prime[half..], &b[0..half]);

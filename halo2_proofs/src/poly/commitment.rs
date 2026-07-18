@@ -116,7 +116,11 @@ impl<C: CurveAffine> Params<C> {
     /// This computes a commitment to a polynomial described by the provided
     /// slice of coefficients. The commitment will be blinded by the blinding
     /// factor `r`.
-    pub fn commit(&self, poly: &Polynomial<C::Scalar, Coeff>, r: Blind<C::Scalar>) -> C::Curve {
+    pub fn commit(&self, poly: &Polynomial<C::Scalar, Coeff>, r: Blind<C::Scalar>) -> C::Curve
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
         let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
         let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
 
@@ -126,7 +130,42 @@ impl<C: CurveAffine> Params<C> {
         tmp_bases.extend(self.g.iter());
         tmp_bases.push(self.w);
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
+
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+    }
+
+    /// Commits to multiple polynomials in coefficient form in a single batch.
+    ///
+    /// Each polynomial is committed with its corresponding blinding factor.
+    /// Returns one commitment per polynomial.
+    pub fn commit_batch(
+        &self,
+        polys: &[&Polynomial<C::Scalar, Coeff>],
+        r: &[Blind<C::Scalar>],
+    ) -> Vec<C::Curve>
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
+        assert_eq!(polys.len(), r.len());
+        if polys.is_empty() {
+            return Vec::new();
+        }
+
+        polys
+            .iter()
+            .zip(r.iter())
+            .map(|(poly, blind)| self.commit(poly, *blind))
+            .collect()
     }
 
     /// This commits to a polynomial using its evaluations over the $2^k$ size
@@ -136,7 +175,11 @@ impl<C: CurveAffine> Params<C> {
         &self,
         poly: &Polynomial<C::Scalar, LagrangeCoeff>,
         r: Blind<C::Scalar>,
-    ) -> C::Curve {
+    ) -> C::Curve
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
         let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
         let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
 
@@ -146,7 +189,42 @@ impl<C: CurveAffine> Params<C> {
         tmp_bases.extend(self.g_lagrange.iter());
         tmp_bases.push(self.w);
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
+
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+    }
+
+    /// Commits to multiple polynomials in Lagrange form in a single batch.
+    ///
+    /// Each polynomial is committed with its corresponding blinding factor.
+    /// Returns one commitment per polynomial.
+    pub fn commit_batch_lagrange(
+        &self,
+        polys: &[&Polynomial<C::Scalar, LagrangeCoeff>],
+        r: &[Blind<C::Scalar>],
+    ) -> Vec<C::Curve>
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
+        assert_eq!(polys.len(), r.len());
+        if polys.is_empty() {
+            return Vec::new();
+        }
+
+        polys
+            .iter()
+            .zip(r.iter())
+            .map(|(poly, blind)| self.commit_lagrange(poly, *blind))
+            .collect()
     }
 
     /// Generates an empty multiscalar multiplication struct using the

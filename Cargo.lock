@@ -744,6 +744,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuji"
+version = "0.1.0"
+dependencies = [
+ "fuji-sys",
+]
+
+[[package]]
+name = "fuji-pasta"
+version = "0.1.0"
+dependencies = [
+ "ff",
+ "fuji",
+ "fuji-sys",
+ "group",
+ "pasta_curves",
+ "rand_core",
+ "subtle",
+]
+
+[[package]]
+name = "fuji-sys"
+version = "0.1.0"
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -892,6 +916,8 @@ dependencies = [
  "criterion",
  "dashmap",
  "ff",
+ "fuji",
+ "fuji-pasta",
  "getrandom",
  "group",
  "gumdrop",

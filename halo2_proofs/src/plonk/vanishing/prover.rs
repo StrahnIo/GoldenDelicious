@@ -99,11 +99,8 @@ impl<C: CurveAffine> Committed<C> {
             .collect();
 
         // Compute commitments to each h(X) piece
-        let h_commitments_projective: Vec<_> = h_pieces
-            .iter()
-            .zip(h_blinds.iter())
-            .map(|(h_piece, blind)| params.commit(h_piece, *blind))
-            .collect();
+        let h_refs: Vec<&Polynomial<C::Scalar, Coeff>> = h_pieces.iter().collect();
+        let h_commitments_projective = params.commit_batch(&h_refs, &h_blinds);
         let mut h_commitments = vec![C::identity(); h_commitments_projective.len()];
         C::Curve::batch_normalize(&h_commitments_projective, &mut h_commitments);
         let h_commitments = h_commitments;

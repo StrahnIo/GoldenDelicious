@@ -90,10 +90,12 @@ pub fn create_proof<
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let instance_commitments_projective: Vec<_> = instance_values
-                .iter()
-                .map(|poly| params.commit_lagrange(poly, Blind::default()))
-                .collect();
+            let instance_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> =
+                instance_values.iter().collect();
+            let instance_blinds: Vec<Blind<C::Scalar>> =
+                (0..instance_values.len()).map(|_| Blind::default()).collect();
+            let instance_commitments_projective =
+                params.commit_batch_lagrange(&instance_refs, &instance_blinds);
             let mut instance_commitments =
                 vec![C::identity(); instance_commitments_projective.len()];
             C::Curve::batch_normalize(&instance_commitments_projective, &mut instance_commitments);
@@ -302,11 +304,9 @@ pub fn create_proof<
                 .iter()
                 .map(|_| Blind(C::Scalar::random(&mut rng)))
                 .collect();
-            let advice_commitments_projective: Vec<_> = advice
-                .iter()
-                .zip(advice_blinds.iter())
-                .map(|(poly, blind)| params.commit_lagrange(poly, *blind))
-                .collect();
+            let advice_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> = advice.iter().collect();
+            let advice_commitments_projective =
+                params.commit_batch_lagrange(&advice_refs, &advice_blinds);
             let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
             C::Curve::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
             let advice_commitments = advice_commitments;

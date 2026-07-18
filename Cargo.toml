@@ -1,7 +1,11 @@
 [workspace]
+resolver = "2"
 members = [
     "halo2",
     "halo2_gadgets",
     "halo2_poseidon",
     "halo2_proofs",
+    "fuji/fuji-sys",
+    "fuji/fuji",
+    "fuji/fuji-pasta",
 ]

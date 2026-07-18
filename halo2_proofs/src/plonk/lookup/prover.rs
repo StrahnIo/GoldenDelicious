@@ -200,21 +200,23 @@ impl<F: WithSmallOrderMulGroup<3>> Argument<F> {
             &compressed_table_expression,
         )?;
 
-        // Closure to construct commitment to vector of values
-        let mut commit_values = |values: &Polynomial<C::Scalar, LagrangeCoeff>| {
-            let poly = pk.vk.domain.lagrange_to_coeff(values.clone());
-            let blind = Blind(C::Scalar::random(&mut rng));
-            let commitment = params.commit_lagrange(values, blind).to_affine();
-            (poly, blind, commitment)
-        };
+        // Commit to permuted input and table expressions in a single batch
+        let permuted_blinds = [
+            Blind(C::Scalar::random(&mut rng)),
+            Blind(C::Scalar::random(&mut rng)),
+        ];
+        let permuted_refs = [&permuted_input_expression, &permuted_table_expression];
+        let permuted_commitments =
+            params.commit_batch_lagrange(&permuted_refs, &permuted_blinds);
 
-        // Commit to permuted input expression
-        let (permuted_input_poly, permuted_input_blind, permuted_input_commitment) =
-            commit_values(&permuted_input_expression);
+        let permuted_input_commitment = permuted_commitments[0].to_affine();
+        let permuted_table_commitment = permuted_commitments[1].to_affine();
 
-        // Commit to permuted table expression
-        let (permuted_table_poly, permuted_table_blind, permuted_table_commitment) =
-            commit_values(&permuted_table_expression);
+        let [permuted_input_blind, permuted_table_blind] = permuted_blinds;
+        let permuted_input_poly =
+            pk.vk.domain.lagrange_to_coeff(permuted_input_expression.clone());
+        let permuted_table_poly =
+            pk.vk.domain.lagrange_to_coeff(permuted_table_expression.clone());
 
         // Hash permuted input commitment
         transcript.write_point(permuted_input_commitment)?;
