@@ -6,3 +6,5 @@
 .vscode
 .DS_Store
 /book/book
+.history/
+session-*.md
