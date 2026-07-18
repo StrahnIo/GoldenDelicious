@@ -1,9 +1,6 @@
 //! This module provides common utilities, traits and structures for group,
 //! field and polynomial arithmetic.
 
-#[cfg(feature = "fuji")]
-pub(crate) mod fuji;
-
 pub use ff::Field;
 use group::{
     ff::{BatchInvert, PrimeField},

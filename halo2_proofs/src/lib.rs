@@ -2,12 +2,11 @@
 //!
 //! ## Feature flags
 //!
-//! - **`fuji`** — Enables Apple Silicon AMX/SME acceleration via the [`fuji`] library.
-//!   Requires Apple Silicon (M1–M4) and `DYLD_LIBRARY_PATH` pointing to
-//!   `libfuji.dylib`. Uses AMX on M1–M4 and additionally detects SME on M4+.
-//!   The `fuji` feature performs no runtime processor detection;
-//!   it is the caller's responsibility to ensure the target is a compatible
-//!   Apple Silicon system.
+//! - **`fuji`** — Enables Apple Silicon SME detection via the [`fuji`] library.
+//!   Reserved for future SME-accelerated MSM dispatch. Field arithmetic and
+//!   multi-scalar multiplication use Rust NEON Montgomery (`pasta_curves`).
+//!   Requires Apple Silicon (M4+) and `DYLD_LIBRARY_PATH` pointing to
+//!   `libfuji.dylib`.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The actual lints we want to disable.

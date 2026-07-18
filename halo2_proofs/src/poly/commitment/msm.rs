@@ -170,14 +170,6 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
         assert_eq!(scalars.len(), len);
 
-        #[cfg(feature = "fuji")]
-        if self.params.n >= 64 {
-            use crate::arithmetic::fuji;
-            if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
-                return bool::from(result.is_identity());
-            }
-        }
-
         bool::from(best_multiexp(&scalars, &bases).is_identity())
     }
 }
