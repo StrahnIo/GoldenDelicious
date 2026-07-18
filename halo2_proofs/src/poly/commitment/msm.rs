@@ -1,6 +1,6 @@
 use super::Params;
 use crate::arithmetic::{best_multiexp, CurveAffine};
-use ff::Field;
+use ff::{Field, PrimeField};
 use group::Group;
 
 #[cfg(feature = "fuji")]
@@ -14,12 +14,23 @@ pub struct MSM<'a, C: CurveAffine> {
     g_scalars: Option<Vec<C::Scalar>>,
     w_scalar: Option<C::Scalar>,
     u_scalar: Option<C::Scalar>,
-    // x-coordinate -> (scalar, y-coordinate)
     other: BTreeMap<C::Base, (C::Scalar, C::Base)>,
     #[cfg(feature = "fuji")]
     fuji_scalars: Vec<C::Scalar>,
     #[cfg(feature = "fuji")]
-    fuji_bases_mont: Vec<fuji::FujiAffine>,
+    fuji_bases_mont: Vec<FujiAffine>,
+    #[cfg(feature = "fuji")]
+    fuji_g_scalars: Vec<C::Scalar>,
+    #[cfg(feature = "fuji")]
+    fuji_g_bases: Vec<FujiAffine>,
+    #[cfg(feature = "fuji")]
+    fuji_w_scalar: Option<C::Scalar>,
+    #[cfg(feature = "fuji")]
+    fuji_w_base: FujiAffine,
+    #[cfg(feature = "fuji")]
+    fuji_u_scalar: Option<C::Scalar>,
+    #[cfg(feature = "fuji")]
+    fuji_u_base: FujiAffine,
 }
 
 impl<'a, C: CurveAffine> MSM<'a, C> {
@@ -40,6 +51,21 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
             fuji_scalars: Vec::new(),
             #[cfg(feature = "fuji")]
             fuji_bases_mont: Vec::new(),
+            #[cfg(feature = "fuji")]
+            fuji_g_scalars: Vec::new(),
+            #[cfg(feature = "fuji")]
+            fuji_g_bases: {
+                let curve = FujiCurve::Pallas;
+                params.g.iter().map(|p| point_to_fuji_affine_mont(p, curve)).collect()
+            },
+            #[cfg(feature = "fuji")]
+            fuji_w_scalar: None,
+            #[cfg(feature = "fuji")]
+            fuji_w_base: point_to_fuji_affine_mont(&params.w, FujiCurve::Pallas),
+            #[cfg(feature = "fuji")]
+            fuji_u_scalar: None,
+            #[cfg(feature = "fuji")]
+            fuji_u_base: point_to_fuji_affine_mont(&params.u, FujiCurve::Pallas),
         }
     }
 
@@ -75,6 +101,13 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
         {
             self.fuji_scalars.extend(other.fuji_scalars.iter());
             self.fuji_bases_mont.extend(other.fuji_bases_mont.iter());
+            self.fuji_g_scalars.extend(other.fuji_g_scalars.iter());
+            if let Some(ws) = other.fuji_w_scalar {
+                self.fuji_w_scalar = self.fuji_w_scalar.map_or(Some(ws), |a| Some(a + &ws));
+            }
+            if let Some(us) = other.fuji_u_scalar {
+                self.fuji_u_scalar = self.fuji_u_scalar.map_or(Some(us), |a| Some(a + &us));
+            }
         }
     }
 
@@ -130,6 +163,14 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
             g_scalars[0] += &constant;
             self.g_scalars = Some(g_scalars);
         }
+        #[cfg(feature = "fuji")]
+        {
+            let n = self.params.n as usize;
+            if self.fuji_g_scalars.is_empty() {
+                self.fuji_g_scalars = vec![C::Scalar::ZERO; n];
+            }
+            self.fuji_g_scalars[0] = self.fuji_g_scalars[0] + constant;
+        }
     }
 
     /// Add a vector of scalars to `g_scalars`. This function will panic if the
@@ -143,16 +184,32 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
         } else {
             self.g_scalars = Some(scalars.to_vec());
         }
+        #[cfg(feature = "fuji")]
+        {
+            if self.fuji_g_scalars.is_empty() {
+                self.fuji_g_scalars = scalars.to_vec();
+            } else {
+                for (a, b) in self.fuji_g_scalars.iter_mut().zip(scalars.iter()) {
+                    *a = *a + *b;
+                }
+            }
+        }
     }
 
     /// Add to `w_scalar`
     pub fn add_to_w_scalar(&mut self, scalar: C::Scalar) {
         self.w_scalar = self.w_scalar.map_or(Some(scalar), |a| Some(a + &scalar));
+        #[cfg(feature = "fuji")] {
+            self.fuji_w_scalar = self.fuji_w_scalar.map_or(Some(scalar), |a| Some(a + &scalar));
+        }
     }
 
     /// Add to `u_scalar`
     pub fn add_to_u_scalar(&mut self, scalar: C::Scalar) {
         self.u_scalar = self.u_scalar.map_or(Some(scalar), |a| Some(a + &scalar));
+        #[cfg(feature = "fuji")] {
+            self.fuji_u_scalar = self.fuji_u_scalar.map_or(Some(scalar), |a| Some(a + &scalar));
+        }
     }
 
     /// Scale all scalars in the MSM by some scaling factor
@@ -169,6 +226,15 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
 
         self.w_scalar = self.w_scalar.map(|a| a * &factor);
         self.u_scalar = self.u_scalar.map(|a| a * &factor);
+
+        #[cfg(feature = "fuji")]
+        {
+            for gs in self.fuji_g_scalars.iter_mut() {
+                *gs = *gs * factor;
+            }
+            self.fuji_w_scalar = self.fuji_w_scalar.map(|a| a * factor);
+            self.fuji_u_scalar = self.fuji_u_scalar.map(|a| a * factor);
+        }
     }
 
     /// Perform multiexp and check that it results in zero
@@ -209,26 +275,59 @@ impl<'a, C: CurveAffine> MSM<'a, C> {
         assert_eq!(scalars.len(), len);
 
         #[cfg(feature = "fuji")]
-        if self.fuji_scalars.len() >= 256 {
+        {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
-                if let Some(result) = fuji::try_multiexp_precomputed::<C>(
-                    &self.fuji_scalars, &self.fuji_bases_mont,
-                ) {
-                    return bool::from(result.is_identity());
-                }
-            }
-        } else if self.params.n >= 64 {
-            use crate::arithmetic::fuji;
-            if fuji::fuji_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
-                    return bool::from(result.is_identity());
+                let total = self.fuji_scalars.len()
+                    + self.fuji_g_scalars.len()
+                    + self.fuji_w_scalar.map(|_| 1).unwrap_or(0)
+                    + self.fuji_u_scalar.map(|_| 1).unwrap_or(0);
+                if total >= 256 {
+                    let mut fs: Vec<C::Scalar> = Vec::with_capacity(total);
+                    let mut fb: Vec<FujiAffine> = Vec::with_capacity(total);
+                    fs.extend(self.fuji_scalars.iter());
+                    fb.extend(self.fuji_bases_mont.iter());
+                    if !self.fuji_g_scalars.is_empty() {
+                        fs.extend(self.fuji_g_scalars.iter());
+                        fb.extend(self.fuji_g_bases.iter());
+                    }
+                    if let Some(ws) = self.fuji_w_scalar {
+                        fs.push(ws);
+                        fb.push(self.fuji_w_base);
+                    }
+                    if let Some(us) = self.fuji_u_scalar {
+                        fs.push(us);
+                        fb.push(self.fuji_u_base);
+                    }
+                    if let Some(result) = fuji::try_multiexp_precomputed::<C>(&fs, &fb) {
+                        return bool::from(result.is_identity());
+                    }
+                } else if self.params.n >= 64 {
+                    if let Some(result) = fuji::try_multiexp::<C>(&scalars, &bases) {
+                        return bool::from(result.is_identity());
+                    }
                 }
             }
         }
 
         bool::from(best_multiexp(&scalars, &bases).is_identity())
     }
+}
+
+#[cfg(feature = "fuji")]
+fn point_to_fuji_affine_mont<C: CurveAffine>(p: &C, curve: FujiCurve) -> FujiAffine
+where
+    C::Base: ff::PrimeField,
+{
+    let coords = p.coordinates().unwrap();
+    let x_repr = coords.x().to_repr();
+    let y_repr = coords.y().to_repr();
+    let mut xb = [0u8; 32]; xb.copy_from_slice(x_repr.as_ref());
+    let mut yb = [0u8; 32]; yb.copy_from_slice(y_repr.as_ref());
+    FujiAffine::from_coordinates(
+        FujiField::from_bytes(&xb).to_mont(curve),
+        FujiField::from_bytes(&yb).to_mont(curve),
+    )
 }
 
 #[cfg(test)]
