@@ -12,10 +12,17 @@ fn sw_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm-sw");
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(500));
     for k in 8..13 {
-        let coeffs: Vec<Fq> = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect();
-        let bases = Params::<EpAffine>::new(k).get_g();
+        let params = Params::<EpAffine>::new(k);
         group.bench_function(BenchmarkId::new("k", k), |b| {
-            b.iter(|| best_multiexp(&coeffs, &bases))
+            b.iter_with_setup(
+                || {
+                    // Not measured: allocate vectors
+                    let coeffs: Vec<Fq> = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect();
+                    let bases = params.get_g();
+                    (coeffs, bases)
+                },
+                |(c, b)| { best_multiexp(&c, &b); },
+            )
         });
     }
 }
@@ -25,10 +32,16 @@ fn sw_all1_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm-sw-all1");
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(500));
     for k in 8..13 {
-        let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
-        let bases = Params::<EpAffine>::new(k).get_g();
+        let params = Params::<EpAffine>::new(k);
         group.bench_function(BenchmarkId::new("k", k), |b| {
-            b.iter(|| best_multiexp(&coeffs, &bases))
+            b.iter_with_setup(
+                || {
+                    let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
+                    let bases = params.get_g();
+                    (coeffs, bases)
+                },
+                |(c, b)| { best_multiexp(&c, &b); },
+            )
         });
     }
 }
@@ -39,15 +52,20 @@ fn fuji_benchmark(c: &mut Criterion) {
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(500));
     for k in 8..13 {
         let params = Params::<EpAffine>::new(k);
-        // Use all-1 scalars to ensure PRL path is exercised (avoids multi-window bug).
-        let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
-        let bases = params.get_g();
-        let mut msm = MSM::new(&params);
-        for (s, base) in coeffs.iter().zip(bases.iter()) {
-            msm.append_term(*s, *base);
-        }
         group.bench_function(BenchmarkId::new("k", k), |b| {
-            b.iter(|| msm.clone().eval())
+            b.iter_with_setup(
+                || {
+                    // Not measured: build MSM from all-1 scalars (avoids multi-window PRL bug)
+                    let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
+                    let bases = params.get_g();
+                    let mut msm = MSM::new(&params);
+                    for (s, base) in coeffs.iter().zip(bases.iter()) {
+                        msm.append_term(*s, *base);
+                    }
+                    msm
+                },
+                |msm| { msm.eval(); },
+            )
         });
     }
 }
