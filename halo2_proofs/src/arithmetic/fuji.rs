@@ -2,6 +2,7 @@ use crate::arithmetic::CurveAffine;
 use ff::PrimeField;
 use fuji::FujiCurve;
 use group::Group;
+use std::any::TypeId;
 
 pub fn fuji_available() -> bool {
     fuji::prl::prl_available()
@@ -46,6 +47,32 @@ where
 
     let result = fuji::msm::prl_pippenger(&scalars, &bases_mont, curve).ok()?;
     Some(fuji_point_to_curve::<C>(result, curve))
+}
+
+/// Try to compute an NTT using Fuji's C library.
+/// Returns `None` if the field type is unsupported or PRL unavailable.
+/// Try to compute an NTT using Fuji's C library.
+///
+/// Returns `None` if PRL is unavailable, the field type is unsupported,
+/// or the input is too small.
+///
+/// NOTE: Currently disabled because fuji_ntt uses its own omega internally
+/// and the inverse NTT may handle the 1/n division differently from Rust.
+/// Needs root-of-unity convention confirmation from Apple engineers.
+pub(crate) fn try_fft<F>(
+    _a: &mut [F],
+    _omega: &F,
+    _log_n: u32,
+    _invert: bool,
+) -> Option<()>
+where
+    F: PrimeField,
+    F::Repr: AsRef<[u8]>,
+{
+    // Placeholder — returns None to fall through to best_fft.
+    // Enable when Apple confirms fuji_ntt omega convention matches
+    // pasta_curves' ROOT_OF_UNITY.
+    None
 }
 
 fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
