@@ -1,7 +1,4 @@
-#[macro_use]
-extern crate criterion;
-
-use criterion::{BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use ff::{Field, PrimeField};
 use halo2_proofs::arithmetic::{best_multiexp, CurveAffine};
 use halo2_proofs::pasta::{EpAffine, Fq};
@@ -10,32 +7,34 @@ use rand_core::OsRng;
 
 fn bench_msm(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm");
-    group.sample_size(10).measurement_time(std::time::Duration::from_secs(30)).warm_up_time(std::time::Duration::from_millis(500));
+    group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(200));
 
     for k in 11..12 {
         let params = Params::<EpAffine>::new(k);
 
-        // SW — random scalars (realistic)
+        // SW — random scalars
         group.bench_function(BenchmarkId::new("sw", k), |b| {
-            b.iter_with_setup(
+            b.iter_batched(
                 || {
                     let coeffs: Vec<Fq> = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect();
                     let bases = params.get_g();
                     (coeffs, bases)
                 },
-                |(c, b)| { best_multiexp(&c, &b); },
+                |(c, b)| black_box(best_multiexp(&c, &b)),
+                BatchSize::LargeInput,
             )
         });
 
         // SW — all-1 scalars
         group.bench_function(BenchmarkId::new("sw-all1", k), |b| {
-            b.iter_with_setup(
+            b.iter_batched(
                 || {
                     let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
                     let bases = params.get_g();
                     (coeffs, bases)
                 },
-                |(c, b)| { best_multiexp(&c, &b); },
+                |(c, b)| black_box(best_multiexp(&c, &b)),
+                BatchSize::LargeInput,
             )
         });
 
@@ -43,9 +42,9 @@ fn bench_msm(c: &mut Criterion) {
         {
             use halo2_proofs::poly::commitment::MSM;
 
-            // Fuji PRL — via MSM::eval() (full integration path)
+            // Fuji PRL — via MSM::eval()
             group.bench_function(BenchmarkId::new("fuji-prl", k), |b| {
-                b.iter_with_setup(
+                b.iter_batched(
                     || {
                         let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
                         let bases = params.get_g();
@@ -55,37 +54,34 @@ fn bench_msm(c: &mut Criterion) {
                         }
                         msm
                     },
-                    |msm| { msm.eval(); },
+                    |msm| black_box(msm.eval()),
+                    BatchSize::LargeInput,
                 )
             });
 
-            // Fuji — direct prl_pippenger (pure C, no MSM assembly)
+            // Fuji — direct prl_pippenger
             group.bench_function(BenchmarkId::new("fuji-all1", k), |b| {
-                b.iter_with_setup(
+                b.iter_batched(
                     || {
                         let curve = fuji::FujiCurve::Pallas;
                         let bases_mont: Vec<fuji::FujiAffine> = params.get_g().iter().map(|base| {
                             let coords = base.coordinates().unwrap();
-                            let x = {
-                                let bytes = coords.x().to_repr();
-                                let mut buf = [0u8; 32];
-                                buf.copy_from_slice(bytes.as_ref());
-                                fuji::FujiField::from_bytes(&buf).to_mont(curve)
-                            };
-                            let y = {
-                                let bytes = coords.y().to_repr();
-                                let mut buf = [0u8; 32];
-                                buf.copy_from_slice(bytes.as_ref());
-                                fuji::FujiField::from_bytes(&buf).to_mont(curve)
-                            };
+                            let bytes_x = coords.x().to_repr();
+                            let bytes_y = coords.y().to_repr();
+                            let mut bx = [0u8; 32]; bx.copy_from_slice(bytes_x.as_ref());
+                            let mut by = [0u8; 32]; by.copy_from_slice(bytes_y.as_ref());
+                            let x = fuji::FujiField::from_bytes(&bx).to_mont(curve);
+                            let y = fuji::FujiField::from_bytes(&by).to_mont(curve);
                             fuji::FujiAffine::from_coordinates(x, y)
                         }).collect();
-                        let scalars: Vec<fuji::FujiField> = (0..(1 << k)).map(|_| fuji::FujiField::one()).collect();
+                        let scalars: Vec<fuji::FujiField> =
+                            (0..(1 << k)).map(|_| fuji::FujiField::one()).collect();
                         (bases_mont, scalars, curve)
                     },
                     |(bases, scalars, curve)| {
-                        let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
                     },
+                    BatchSize::LargeInput,
                 )
             });
         }
