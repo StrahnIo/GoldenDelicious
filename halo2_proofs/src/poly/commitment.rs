@@ -130,6 +130,16 @@ impl<C: CurveAffine> Params<C> {
         tmp_bases.extend(self.g.iter());
         tmp_bases.push(self.w);
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
+
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
     }
 
@@ -149,18 +159,6 @@ impl<C: CurveAffine> Params<C> {
         assert_eq!(polys.len(), r.len());
         if polys.is_empty() {
             return Vec::new();
-        }
-
-        let per_msm = (self.n as usize) + 1;
-
-        let mut all_scalars = Vec::with_capacity(polys.len() * per_msm);
-        let mut all_bases = Vec::with_capacity(polys.len() * per_msm);
-
-        for (&poly, blind) in polys.iter().zip(r.iter()) {
-            all_scalars.extend(poly.iter());
-            all_scalars.push(blind.0);
-            all_bases.extend(self.g.iter());
-            all_bases.push(self.w);
         }
 
         polys
@@ -191,6 +189,16 @@ impl<C: CurveAffine> Params<C> {
         tmp_bases.extend(self.g_lagrange.iter());
         tmp_bases.push(self.w);
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                    return result;
+                }
+            }
+        }
+
         best_multiexp::<C>(&tmp_scalars, &tmp_bases)
     }
 
@@ -212,19 +220,6 @@ impl<C: CurveAffine> Params<C> {
             return Vec::new();
         }
 
-        let per_msm = (self.n as usize) + 1;
-
-        let mut all_scalars = Vec::with_capacity(polys.len() * per_msm);
-        let mut all_bases = Vec::with_capacity(polys.len() * per_msm);
-
-        for (&poly, blind) in polys.iter().zip(r.iter()) {
-            all_scalars.extend(poly.iter());
-            all_scalars.push(blind.0);
-            all_bases.extend(self.g_lagrange.iter());
-            all_bases.push(self.w);
-        }
-
-        #[cfg(feature = "fuji")]
         polys
             .iter()
             .zip(r.iter())
