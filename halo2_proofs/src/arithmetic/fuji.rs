@@ -842,4 +842,58 @@ mod tests {
         // assert_eq!(result_ep, expected, "64 random PRL != software");
         // For now, just check the result is a valid curve point (already done above).
     }
+
+    /// Quick performance comparison: prl_pippenger vs best_multiexp for all-1 scalars.
+    /// Run with: cargo test --features fuji -- --nocapture perf_prl_vs_sw
+    #[test]
+    fn perf_prl_vs_sw() {
+        use ff::Field;
+        use std::hint::black_box;
+        use std::time::Instant;
+        use crate::arithmetic::best_multiexp;
+
+        let curve = FujiCurve::Pallas;
+        for k in [8u32, 9, 10, 11, 12] {
+            let n = 1 << k;
+            let params = crate::poly::commitment::Params::<pasta_curves::EpAffine>::new(k);
+            let bases: Vec<pasta_curves::EpAffine> = params.get_g();
+
+            // PRL path: convert bases to Montgomery
+            let bases_mont: Vec<fuji::FujiAffine> = bases.iter().map(|b| {
+                let c = b.coordinates().unwrap();
+                let x = field_to_fuji(c.x()).to_mont(curve);
+                let y = field_to_fuji(c.y()).to_mont(curve);
+                fuji::FujiAffine::from_coordinates(x, y)
+            }).collect();
+            let scalars_fuji: Vec<fuji::FujiField> = (0..n).map(|_| fuji::FujiField::one()).collect();
+            let scalars_fq: Vec<pasta_curves::Fq> = (0..n).map(|_| pasta_curves::Fq::ONE).collect();
+
+            // Warmup
+            for _ in 0..3 {
+                let _ = prl_pippenger(black_box(&scalars_fuji), black_box(&bases_mont), curve).unwrap();
+                let _ = best_multiexp::<pasta_curves::EpAffine>(black_box(&scalars_fq), black_box(&bases));
+            }
+
+            // Measure PRL
+            let t0 = Instant::now();
+            let iterations = 100u32;
+            for _ in 0..iterations {
+                let r = prl_pippenger(black_box(&scalars_fuji), black_box(&bases_mont), curve).unwrap();
+                black_box(r);
+            }
+            let prl_time = t0.elapsed() / iterations;
+
+            // Measure SW
+            let t0 = Instant::now();
+            for _ in 0..iterations {
+                let r = best_multiexp::<pasta_curves::EpAffine>(black_box(&scalars_fq), black_box(&bases));
+                black_box(r);
+            }
+            let sw_time = t0.elapsed() / iterations;
+
+            eprintln!("k={} (n={}): PRL {:?}  SW {:?}  ratio {:.2}x",
+                      k, n, prl_time, sw_time,
+                      prl_time.as_nanos() as f64 / sw_time.as_nanos() as f64);
+        }
+    }
 }
