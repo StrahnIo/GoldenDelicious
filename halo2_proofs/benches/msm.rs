@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ff::{Field, PrimeField};
 use halo2_proofs::arithmetic::{best_multiexp, CurveAffine};
 use halo2_proofs::pasta::{EpAffine, Fq};
@@ -14,27 +14,25 @@ fn bench_msm(c: &mut Criterion) {
 
         // SW — random scalars
         group.bench_function(BenchmarkId::new("sw", k), |b| {
-            b.iter_batched(
+            b.iter_with_setup(
                 || {
                     let coeffs: Vec<Fq> = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect();
                     let bases = params.get_g();
                     (coeffs, bases)
                 },
                 |(c, b)| black_box(best_multiexp(&c, &b)),
-                BatchSize::LargeInput,
             )
         });
 
         // SW — all-1 scalars
         group.bench_function(BenchmarkId::new("sw-all1", k), |b| {
-            b.iter_batched(
+            b.iter_with_setup(
                 || {
                     let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
                     let bases = params.get_g();
                     (coeffs, bases)
                 },
                 |(c, b)| black_box(best_multiexp(&c, &b)),
-                BatchSize::LargeInput,
             )
         });
 
@@ -44,7 +42,7 @@ fn bench_msm(c: &mut Criterion) {
 
             // Fuji PRL — via MSM::eval()
             group.bench_function(BenchmarkId::new("fuji-prl", k), |b| {
-                b.iter_batched(
+                b.iter_with_setup(
                     || {
                         let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
                         let bases = params.get_g();
@@ -55,13 +53,12 @@ fn bench_msm(c: &mut Criterion) {
                         msm
                     },
                     |msm| black_box(msm.eval()),
-                    BatchSize::LargeInput,
                 )
             });
 
             // Fuji — direct prl_pippenger
             group.bench_function(BenchmarkId::new("fuji-all1", k), |b| {
-                b.iter_batched(
+                b.iter_with_setup(
                     || {
                         let curve = fuji::FujiCurve::Pallas;
                         let bases_mont: Vec<fuji::FujiAffine> = params.get_g().iter().map(|base| {
@@ -81,7 +78,6 @@ fn bench_msm(c: &mut Criterion) {
                     |(bases, scalars, curve)| {
                         black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
                     },
-                    BatchSize::LargeInput,
                 )
             });
         }
