@@ -59,7 +59,7 @@ blake2b_simd = "1"
 maybe-rayon = {version = "0.1.0", default-features = false}
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-fuji = { path = "../fuji/fuji", optional = true }
+fuji = { path = "../fuji/fuji", optional = true, features = ["parallel"] }
 fuji-pasta = { path = "../fuji/fuji-pasta", optional = true }
 
 # Developer tooling dependencies
