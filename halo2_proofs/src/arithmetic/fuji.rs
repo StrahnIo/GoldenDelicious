@@ -7,7 +7,7 @@ pub fn fuji_available() -> bool {
     fuji::prl::prl_available()
 }
 
-fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
+pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
     let repr = s.to_repr();
     let bytes: &[u8] = repr.as_ref();
     let mut buf = [0u8; 32];
@@ -45,6 +45,26 @@ where
         .collect();
 
     let result = fuji::msm::prl_pippenger(&scalars, &bases_mont, curve).ok()?;
+    Some(fuji_point_to_curve::<C>(result, curve))
+}
+
+/// Like try_multiexp but bases are already in Montgomery form.
+/// Used by MSM::eval() which pre-builds fuji_scalars and fuji_bases_mont.
+pub(crate) fn try_multiexp_precomputed<C>(
+    coeffs: &[C::Scalar],
+    bases_mont: &[fuji::FujiAffine],
+) -> Option<C::Curve>
+where
+    C: CurveAffine,
+    C::Scalar: PrimeField,
+    C::Base: PrimeField,
+{
+    if !fuji_available() || coeffs.len() < 256 || coeffs.len() != bases_mont.len() {
+        return None;
+    }
+    let curve = FujiCurve::Pallas;
+    let scalars: Vec<fuji::FujiField> = coeffs.iter().map(field_to_fuji).collect();
+    let result = fuji::msm::prl_pippenger(&scalars, bases_mont, curve).ok()?;
     Some(fuji_point_to_curve::<C>(result, curve))
 }
 
@@ -134,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Apple prl_pippenger: random multi-window scalars need further debug"]
+    
     fn test_try_multiexp_256_random() {
         // Random multi-window scalars — Apple's prl_pippenger handles these correctly.
         use pasta_curves::{EpAffine, Fq};
@@ -153,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Apple prl_pippenger: random multi-window scalars need further debug"]
+    
     fn test_prl_64_random() {
         use pasta_curves::{EpAffine, Fq};
         use ff::Field as _;
