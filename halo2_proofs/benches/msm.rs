@@ -10,7 +10,7 @@ use rand_core::OsRng;
 
 fn bench_msm(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm");
-    group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(500));
+    group.sample_size(10).measurement_time(std::time::Duration::from_secs(30)).warm_up_time(std::time::Duration::from_millis(500));
 
     for k in 11..12 {
         let params = Params::<EpAffine>::new(k);
