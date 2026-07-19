@@ -40,6 +40,10 @@ name = "msm_4x"
 harness = false
 
 [[bench]]
+name = "msm_debug"
+harness = false
+
+[[bench]]
 name = "plonk"
 harness = false
 

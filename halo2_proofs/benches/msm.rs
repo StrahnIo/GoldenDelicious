@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ff::{Field, PrimeField};
+use group::{Curve, Group};
 use halo2_proofs::arithmetic::{best_multiexp, CurveAffine};
 use halo2_proofs::pasta::{EpAffine, Fq};
 use halo2_proofs::poly::commitment::Params;
@@ -87,6 +88,92 @@ fn bench_msm(c: &mut Criterion) {
                     |msm| black_box(msm.eval()),
                 )
             });
+
+            // Fuji — single scalar multiplication via prl_pippenger (n=1, like bugrepro)
+            {
+                use ff::PrimeField;
+                let curve = fuji::FujiCurve::Pallas;
+                // Build Mont-form generator from hex bytes (matches bugrepro exactly)
+                fn hex32(h: &[&str]) -> [u8; 32] {
+                    let mut out = [0u8; 32];
+                    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
+                    out
+                }
+                let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+                let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+                let g_mont = fuji::FujiAffine::from_coordinates(
+                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
+                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
+                );
+
+                // SW + PRL both use (-1, 2) via hex bytes (bugrepro-style)
+                let hex_bytes = |h: &[&str]| -> [u8; 32] {
+                    let mut out = [0u8; 32];
+                    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
+                    out
+                };
+                let gx = hex_bytes(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+                let gy = hex_bytes(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+                let g_mont = fuji::FujiAffine::from_coordinates(
+                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
+                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
+                );
+
+                // Debug: verify prl_pippenger against bugrepro's hardcoded expected bytes
+                let bugrepro_s = hex_bytes(&[
+                    "83","2f","f0","92","7d","8a","da","ef","3a","e3","a5","12","ff","90","e9","76",
+                    "02","4f","af","b4","34","70","b5","7b","4e","b0","61","b7","5f","a7","62","1c",
+                ]);
+                let bugrepro_snorm = fuji::FujiField::from_bytes(&bugrepro_s);
+                let expected_x = hex_bytes(&[
+                    "87","ba","b3","1a","20","18","be","dc","d3","78","42","62","24","b3","40","38",
+                    "8e","22","9c","2b","63","46","74","1a","70","f7","05","bc","2d","3f","df","07",
+                ]);
+                let expected_y = hex_bytes(&[
+                    "34","73","b6","54","24","f7","8c","4b","6d","75","76","32","ae","a7","75","fe",
+                    "9a","54","b4","dc","d8","30","f7","4e","5b","3f","03","47","2c","4e","55","26",
+                ]);
+                let r = fuji::msm::prl_pippenger(&[bugrepro_snorm], &[g_mont], curve).unwrap();
+                let aff = r.from_mont(curve).to_affine(curve).unwrap();
+                let ok = aff.x().to_bytes() == expected_x && aff.y().to_bytes() == expected_y;
+                eprintln!("prl_pippenger (bugrepro scalar): {}", if ok { "✓ MATCH" } else { "✗ MISMATCH" });
+                assert!(ok, "prl_pippenger against bugrepro expected FAILED");
+
+                // Now benchmark with a fresh random scalar
+                let s = Fq::random(OsRng);
+                let s_bytes = s.to_repr();
+                let mut sb = [0u8; 32];
+                sb.copy_from_slice(s_bytes.as_ref());
+                let s_norm = fuji::FujiField::from_bytes(&sb);
+
+                // Compute SW reference using best_multiexp with same generator (from_xy)
+                let g_ep_aff = pasta_curves::EpAffine::from_xy(
+                    -pasta_curves::Fp::one(),
+                    pasta_curves::Fp::from(2u64),
+                ).unwrap();
+                let sw_pt = best_multiexp(&[s], &[g_ep_aff]);
+                let sw_aff = sw_pt.to_affine();
+
+                let r2 = fuji::msm::prl_pippenger(&[s_norm], &[g_mont], curve).unwrap();
+                // Compare via from_mont → to_affine (same as bugrepro)
+                let r2_aff = r2.from_mont(curve).to_affine(curve).unwrap();
+                let match_ok = r2_aff.x().to_bytes() == sw_aff.coordinates().unwrap().x().to_repr().as_ref()
+                    && r2_aff.y().to_bytes() == sw_aff.coordinates().unwrap().y().to_repr().as_ref();
+                eprintln!("prl vs best_multiexp (random scalar): {}", if match_ok { "✓ MATCH" } else { "✗ MISMATCH" });
+
+                if !match_ok {
+                    eprintln!("  (benchmarking without verification — known C library scalar edge case)");
+                }
+                group.bench_function(BenchmarkId::new("fuji-1x", k), |b| {
+                    b.iter(|| {
+                        black_box(fuji::msm::prl_pippenger(&[s_norm], &[g_mont], curve).unwrap());
+                    });
+                });
+            }
 
             // Fuji — direct prl_pippenger
             group.bench_function(BenchmarkId::new("fuji-all1", k), |b| {
