@@ -13,13 +13,12 @@ use std::marker::PhantomData;
 
 use criterion::{BenchmarkId, Criterion};
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn bench_plonk(c: &mut Criterion) {
     #[derive(Clone)]
     struct PlonkConfig {
         a: Column<Advice>,
         b: Column<Advice>,
         c: Column<Advice>,
-
         sa: Column<Fixed>,
         sb: Column<Fixed>,
         sc: Column<Fixed>,
@@ -144,12 +143,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     region.assign_fixed(|| "a", self.config.sa, 0, || Value::known(FF::ONE))?;
                     region.assign_fixed(|| "b", self.config.sb, 0, || Value::known(FF::ONE))?;
                     region.assign_fixed(|| "c", self.config.sc, 0, || Value::known(FF::ONE))?;
-                    region.assign_fixed(
-                        || "a * b",
-                        self.config.sm,
-                        0,
-                        || Value::known(FF::ZERO),
-                    )?;
+                    region.assign_fixed(|| "a * b", self.config.sm, 0, || Value::known(FF::ZERO))?;
                     Ok((lhs.cell(), rhs.cell(), out.cell()))
                 },
             )
@@ -181,7 +175,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             let a = meta.advice_column();
             let b = meta.advice_column();
             let c = meta.advice_column();
-
             meta.enable_equality(a);
             meta.enable_equality(b);
             meta.enable_equality(c);
@@ -195,24 +188,14 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let a = meta.query_advice(a, Rotation::cur());
                 let b = meta.query_advice(b, Rotation::cur());
                 let c = meta.query_advice(c, Rotation::cur());
-
                 let sa = meta.query_fixed(sa);
                 let sb = meta.query_fixed(sb);
                 let sc = meta.query_fixed(sc);
                 let sm = meta.query_fixed(sm);
-
                 vec![a.clone() * sa + b.clone() * sb + a * b * sm - (c * sc)]
             });
 
-            PlonkConfig {
-                a,
-                b,
-                c,
-                sa,
-                sb,
-                sc,
-                sm,
-            }
+            PlonkConfig { a, b, c, sa, sb, sc, sm }
         }
 
         fn synthesize(
@@ -221,7 +204,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let cs = StandardPlonk::new(config);
-
             for _ in 0..((1 << (self.k - 1)) - 3) {
                 let a: Value<Assigned<_>> = self.a.into();
                 let mut a_squared = Value::unknown();
@@ -238,7 +220,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                 cs.copy(&mut layouter, a0, a1)?;
                 cs.copy(&mut layouter, b1, c0)?;
             }
-
             Ok(())
         }
     }
@@ -256,12 +237,10 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     fn prover(k: u32, params: &Params<EqAffine>, pk: &ProvingKey<EqAffine>) -> Vec<u8> {
         let rng = OsRng;
-
         let circuit: MyCircuit<Fp> = MyCircuit {
             a: Value::known(Fp::random(rng)),
             k,
         };
-
         let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
         create_proof(params, pk, &[circuit], &[&[]], rng, &mut transcript)
             .expect("proof generation should not fail");
@@ -274,47 +253,68 @@ fn criterion_benchmark(c: &mut Criterion) {
         assert!(verify_proof(params, vk, strategy, &[&[]], &mut transcript).is_ok());
     }
 
-    let k_range = 8..=16;
+    // ── Benches ─────────────────────────────────────────
 
-    let mut keygen_group = c.benchmark_group("plonk-keygen");
-    keygen_group.sample_size(10);
+    let k_range = 8..=12;
+
+    // SW keygen (same with or without Fuji)
+    let mut kg = c.benchmark_group("plonk-keygen");
+    kg.sample_size(10);
     for k in k_range.clone() {
-        keygen_group.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
+        kg.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
             b.iter(|| keygen(k));
         });
     }
-    keygen_group.finish();
+    kg.finish();
 
-    let mut prover_group = c.benchmark_group("plonk-prover");
-    prover_group.sample_size(10);
+    // SW prover (no Fuji feature — always available)
+    let mut ps = c.benchmark_group("plonk-prover-sw");
+    ps.sample_size(10);
     for k in k_range.clone() {
         let (params, pk) = keygen(k);
-
-        prover_group.bench_with_input(
-            BenchmarkId::from_parameter(k),
-            &(k, &params, &pk),
-            |b, &(k, params, pk)| {
-                b.iter(|| prover(k, params, pk));
-            },
-        );
+        ps.bench_with_input(BenchmarkId::from_parameter(k), &(k, &params, &pk), |b, &(k, params, pk)| {
+            b.iter(|| prover(k, params, pk));
+        });
     }
-    prover_group.finish();
+    ps.finish();
 
-    let mut verifier_group = c.benchmark_group("plonk-verifier");
-    for k in k_range {
+    // SW verifier
+    let mut vs = c.benchmark_group("plonk-verifier-sw");
+    vs.sample_size(10);
+    for k in k_range.clone() {
         let (params, pk) = keygen(k);
         let proof = prover(k, &params, &pk);
-
-        verifier_group.bench_with_input(
-            BenchmarkId::from_parameter(k),
-            &(&params, pk.get_vk(), &proof[..]),
-            |b, &(params, vk, proof)| {
-                b.iter(|| verifier(params, vk, proof));
-            },
-        );
+        vs.bench_with_input(BenchmarkId::from_parameter(k), &(&params, pk.get_vk(), &proof[..]), |b, &(params, vk, proof)| {
+            b.iter(|| verifier(params, vk, proof));
+        });
     }
-    verifier_group.finish();
+    vs.finish();
+
+    // Fuji prover/verifier (only with --features fuji)
+    #[cfg(feature = "fuji")]
+    {
+        let mut pf = c.benchmark_group("plonk-prover-fuji");
+        pf.sample_size(10);
+        for k in k_range.clone() {
+            let (params, pk) = keygen(k);
+            pf.bench_with_input(BenchmarkId::from_parameter(k), &(k, &params, &pk), |b, &(k, params, pk)| {
+                b.iter(|| prover(k, params, pk));
+            });
+        }
+        pf.finish();
+
+        let mut vf = c.benchmark_group("plonk-verifier-fuji");
+        vf.sample_size(10);
+        for k in k_range {
+            let (params, pk) = keygen(k);
+            let proof = prover(k, &params, &pk);
+            vf.bench_with_input(BenchmarkId::from_parameter(k), &(&params, pk.get_vk(), &proof[..]), |b, &(params, vk, proof)| {
+                b.iter(|| verifier(params, vk, proof));
+            });
+        }
+        vf.finish();
+    }
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(benches, bench_plonk);
 criterion_main!(benches);
