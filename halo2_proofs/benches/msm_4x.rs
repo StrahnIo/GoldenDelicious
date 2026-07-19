@@ -25,7 +25,7 @@ fn ep_eq(a: &EpAffine, b: &EpAffine) -> bool {
 }
 
 fn main() {
-    for k in [11, 12] {
+    for k in [11] {
         let params = Params::<EpAffine>::new(k);
         let n = 1 << k;
 
@@ -72,10 +72,12 @@ fn main() {
             use group::Curve;
             let curve = FujiCurve::Pallas;
 
-            let g_aff = fuji::FujiAffine::gen_pallas();
+            // Build Mont-form bases from the SAME normal-form generator as SW
+            let mut gx = [0u8; 32]; gx.copy_from_slice(gen_bytes.x().to_repr().as_ref());
+            let mut gy = [0u8; 32]; gy.copy_from_slice(gen_bytes.y().to_repr().as_ref());
             let g_mont = FujiAffine::from_coordinates(
-                g_aff.x().to_mont(curve),
-                g_aff.y().to_mont(curve),
+                FujiField::from_bytes(&gx).to_mont(curve),
+                FujiField::from_bytes(&gy).to_mont(curve),
             );
             let ident_bases: Vec<FujiAffine> = (0..n).map(|_| g_mont).collect();
             let ident_scalars: Vec<Vec<FujiField>> = coeffs
@@ -92,23 +94,32 @@ fn main() {
                 })
                 .collect();
 
-            // timed("prl-identg-4x", k, || {
-            //     for i in 0..4 {
-            //         let _ = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
-            //     }
-            // });
+            timed("prl-identg-4x", k, || {
+                for i in 0..4 {
+                    let _ = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
+                }
+            });
 
-            // Verify each PRL result against SW (compare raw from_mont bytes, like bugrepro)
+            // Verify: convert SW to Mont and compare against PRL's Mont result bytes
             println!("  verifying prl-identg-4x results...");
             for i in 0..4 {
-                println!("\nStarting iteration {}\n", i);
                 let prl_pt = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
-                let prl_norm = prl_pt.from_mont(curve);
-                let sw_affine = &sw_results[i];
-                let sw_bytes = sw_affine.coordinates().unwrap();
-
-                let ok = prl_norm.x_limbs() == sw_bytes.x().to_repr().as_ref()
-                    && prl_norm.y_limbs() == sw_bytes.y().to_repr().as_ref();
+                let swc = sw_results[i].coordinates().unwrap();
+                // Convert SW normal-form result to Mont for comparison (field_to_fuji + to_mont)
+                let sw_x = {
+                    let repr = swc.x().to_repr();
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(repr.as_ref());
+                    FujiField::from_bytes(&buf).to_mont(curve)
+                };
+                let sw_y = {
+                    let repr = swc.y().to_repr();
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(repr.as_ref());
+                    FujiField::from_bytes(&buf).to_mont(curve)
+                };
+                let ok = prl_pt.x_limbs() == sw_x.to_bytes().as_ref()
+                    && prl_pt.y_limbs() == sw_y.to_bytes().as_ref();
 
                 if ok {
                     println!("  ✅ poly[{}] MATCH", i);
@@ -116,10 +127,10 @@ fn main() {
                     println!(
                         "  ❌ MISMATCH poly[{}]: SW ({:02x?}.., {:02x?}..) != PRL ({:02x?}.., {:02x?}..)",
                         i,
-                        &sw_bytes.x().to_repr().as_ref()[..4],
-                        &sw_bytes.y().to_repr().as_ref()[..4],
-                        &prl_norm.x_limbs()[..4],
-                        &prl_norm.y_limbs()[..4],
+                        &sw_x.to_bytes()[..4],
+                        &sw_y.to_bytes()[..4],
+                        &prl_pt.x_limbs()[..4],
+                        &prl_pt.y_limbs()[..4],
                     );
                 }
             }
