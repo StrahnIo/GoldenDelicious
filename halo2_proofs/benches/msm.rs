@@ -5,6 +5,8 @@ use halo2_proofs::pasta::{EpAffine, Fq};
 use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
 
+
+
 fn bench_msm(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm");
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(200));
@@ -38,7 +40,37 @@ fn bench_msm(c: &mut Criterion) {
 
         #[cfg(feature = "fuji")]
         {
+            eprintln!("logical cores: {}, RAYON_NUM_THREADS={:?}",
+                std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+                std::env::var("RAYON_NUM_THREADS").ok());
             use halo2_proofs::poly::commitment::MSM;
+
+            // Apple bugrepro identical: random scalars + identical G base + direct prl_pippenger
+            group.bench_function(BenchmarkId::new("fuji-apple-identg", k), |b| {
+                b.iter_with_setup(
+                    || {
+                        let curve = fuji::FujiCurve::Pallas;
+                        let g_mont = fuji::FujiAffine::from_coordinates(
+                            fuji::FujiAffine::gen_pallas().x().to_mont(curve),
+                            fuji::FujiAffine::gen_pallas().y().to_mont(curve),
+                        );
+                        let bases: Vec<fuji::FujiAffine> = (0..(1 << k)).map(|_| g_mont).collect();
+                        let scalars: Vec<fuji::FujiField> = (0..(1 << k))
+                            .map(|_| {
+                                let s = Fq::random(OsRng);
+                                let b = s.to_repr();
+                                let mut buf = [0u8; 32];
+                                buf.copy_from_slice(b.as_ref());
+                                fuji::FujiField::from_bytes(&buf)
+                            })
+                            .collect();
+                        (bases, scalars, curve)
+                    },
+                    |(bases, scalars, curve)| {
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
+                    },
+                )
+            });
 
             // Fuji PRL — via MSM::eval()
             group.bench_function(BenchmarkId::new("fuji-prl", k), |b| {
