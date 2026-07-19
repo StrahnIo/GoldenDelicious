@@ -17,7 +17,7 @@ fn timed(label: &str, k: u32, f: impl Fn()) {
 }
 
 fn main() {
-    for k in [11,13] {
+    for k in [11,12,13,14] {
         let start_ = Instant::now();
         println!("Begin Params::<EpAffine>::new(k) param generation for round {}...", k);
         let params = Params::<EpAffine>::new(k);
