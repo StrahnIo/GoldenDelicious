@@ -35,12 +35,9 @@ fn main() {
             .collect();
         let bases = params.get_g();
 
-        // ── SW with identical G base ─────────────────────
-        let g_ep = EpAffine::from_xy(
-            -pasta_curves::Fp::one(),
-            pasta_curves::Fp::from(2u64),
-        ).unwrap();
-        let ident_bases_ep: Vec<EpAffine> = (0..n).map(|_| g_ep).collect();
+        // ── SW with identical G base (Pallas generator) ──
+        let gen_affine = <pasta_curves::Ep as group::Group>::generator().to_affine();
+        let ident_bases_ep: Vec<EpAffine> = (0..n).map(|_| gen_affine).collect();
 
         // Compute SW-identg results for verification
         let sw_results: Vec<EpAffine> = (0..4)
