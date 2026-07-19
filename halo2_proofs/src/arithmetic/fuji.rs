@@ -48,6 +48,22 @@ where
     Some(fuji_point_to_curve::<C>(result, curve))
 }
 
+/// Like try_multiexp but scalars and bases are already in Montgomery form.
+pub(crate) fn try_multiexp_mont<C>(
+    scalars_mont: &[fuji::FujiField],
+    bases_mont: &[fuji::FujiAffine],
+) -> Option<C::Curve>
+where
+    C: CurveAffine,
+    C::Base: PrimeField,
+{
+    if !fuji_available() || scalars_mont.len() < 256 || scalars_mont.len() != bases_mont.len() {
+        return None;
+    }
+    let result = fuji::msm::prl_pippenger(scalars_mont, bases_mont, FujiCurve::Pallas).ok()?;
+    Some(fuji_point_to_curve::<C>(result, FujiCurve::Pallas))
+}
+
 fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,
