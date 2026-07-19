@@ -3,7 +3,6 @@ use std::time::Instant;
 use ff::{Field, PrimeField};
 use group::{Curve, Group};
 use halo2_proofs::arithmetic::{best_multiexp, CurveAffine};
-use halo2_proofs::arithmetic::fuji as our_fuji;
 use halo2_proofs::pasta::{EpAffine, Fq};
 use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
@@ -17,15 +16,14 @@ fn timed(label: &str, k: u32, f: impl Fn()) {
     std::io::stdout().flush().ok();
 }
 
-fn ep_eq(a: &EpAffine, b: &EpAffine) -> bool {
-    let ax = a.coordinates().unwrap();
-    let bx = b.coordinates().unwrap();
-    ax.x().to_repr().as_ref() == bx.x().to_repr().as_ref()
-        && ax.y().to_repr().as_ref() == bx.y().to_repr().as_ref()
+fn hex32(h: &[&str]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
+    out
 }
 
 fn main() {
-    for k in [11] {
+    for k in [11, 12] {
         let params = Params::<EpAffine>::new(k);
         let n = 1 << k;
 
@@ -33,95 +31,95 @@ fn main() {
         let coeffs: Vec<Vec<Fq>> = (0..4)
             .map(|_| (0..n).map(|_| Fq::random(OsRng)).collect())
             .collect();
-        let bases = params.get_g();
 
-        // ── SW with identical G base (Pallas generator) ──
-        let gen_affine = <pasta_curves::Ep as group::Group>::generator().to_affine();
-        let gen_bytes = gen_affine.coordinates().unwrap();
-        eprintln!("/// Generator G coordinates (Fp, LE bytes):");
-        eprintln!("///   x = {:02x?}", gen_bytes.x().to_repr().as_ref());
-        eprintln!("///   y = {:02x?}", gen_bytes.y().to_repr().as_ref());
-        let ident_bases_ep: Vec<EpAffine> = (0..n).map(|_| gen_affine).collect();
+        // Identical G base (Pallas generator) for ident-g benchmarks
+        let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+            "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+        let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+            "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+        let g_ep = pasta_curves::EpAffine::from_xy(
+            -pasta_curves::Fp::one(),
+            pasta_curves::Fp::from(2u64),
+        ).unwrap();
 
-        // Dump scalars for SW-identg-4x (first 8 of each set)
-        for set in 0..4 {
-            eprintln!("/// SW-identg-4x scalars set {} (Fq, LE bytes):", set);
-            for (j, s) in coeffs[set].iter().take(8).enumerate() {
-                eprintln!("///   [{}] = {:02x?}", j, s.to_repr().as_ref());
-            }
-            eprintln!("///   ... ({} total, showing first 8)", coeffs[set].len());
-        }
+        // 4× SW — sequential best_multiexp calls (distinct SRS bases)
+        let bases_srs = params.get_g();
+        timed("sw-4x", k, || {
+            let _r0 = best_multiexp(&coeffs[0], &bases_srs);
+            let _r1 = best_multiexp(&coeffs[1], &bases_srs);
+            let _r2 = best_multiexp(&coeffs[2], &bases_srs);
+            let _r3 = best_multiexp(&coeffs[3], &bases_srs);
+        });
 
-        // Dump generator base (same for all)
-        eprintln!("/// SW-identg-4x base (EpAffine, LE bytes, all identical):");
-        eprintln!("///   x = {:02x?}", gen_bytes.x().to_repr().as_ref());
-        eprintln!("///   y = {:02x?}", gen_bytes.y().to_repr().as_ref());
+        // 4× SW — identical G base, random scalars
+        let bases_ident_ep: Vec<EpAffine> = (0..n).map(|_| g_ep).collect();
+        timed("sw-identg-4x", k, || {
+            let _r0 = best_multiexp(&coeffs[0], &bases_ident_ep);
+            let _r1 = best_multiexp(&coeffs[1], &bases_ident_ep);
+            let _r2 = best_multiexp(&coeffs[2], &bases_ident_ep);
+            let _r3 = best_multiexp(&coeffs[3], &bases_ident_ep);
+        });
 
-        // Compute SW-identg results for verification
-        let sw_results: Vec<EpAffine> = (0..4)
-            .map(|i| {
-                let pt = best_multiexp(&coeffs[i], &ident_bases_ep);
-                pt.to_affine()
-            })
-            .collect();
-
-        // ── Fuji PRL with identical G base ────────────────
         #[cfg(feature = "fuji")]
         {
             use fuji::{FujiAffine, FujiField, FujiCurve};
-            use group::Curve;
             let curve = FujiCurve::Pallas;
 
-            // Build Mont-form bases from the SAME normal-form generator as SW
-            let mut gx = [0u8; 32]; gx.copy_from_slice(gen_bytes.x().to_repr().as_ref());
-            let mut gy = [0u8; 32]; gy.copy_from_slice(gen_bytes.y().to_repr().as_ref());
+            // Pre-convert scalars to FujiField (normal form)
+            let scalars_fuji: Vec<Vec<FujiField>> = coeffs.iter().map(|c| {
+                c.iter().map(|s| {
+                    let repr = s.to_repr();
+                    let mut buf = [0u8; 32];
+                    buf.copy_from_slice(repr.as_ref());
+                    FujiField::from_bytes(&buf)
+                }).collect()
+            }).collect();
+
+            // 4× PRL — identical G base (identical bases in Mont form)
             let g_mont = FujiAffine::from_coordinates(
                 FujiField::from_bytes(&gx).to_mont(curve),
                 FujiField::from_bytes(&gy).to_mont(curve),
             );
-            let ident_bases: Vec<FujiAffine> = (0..n).map(|_| g_mont).collect();
-            let ident_scalars: Vec<Vec<FujiField>> = coeffs
-                .iter()
-                .map(|c| {
-                    c.iter()
-                        .map(|s| {
-                            let repr = s.to_repr();
-                            let mut buf = [0u8; 32];
-                            buf.copy_from_slice(repr.as_ref());
-                            FujiField::from_bytes(&buf)
-                        })
-                        .collect()
-                })
-                .collect();
-
+            let bases_ident_mont: Vec<FujiAffine> = (0..n).map(|_| g_mont).collect();
             timed("prl-identg-4x", k, || {
-                for i in 0..4 {
-                    let _ = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
-                }
+                let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_ident_mont, curve).unwrap();
+                let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_ident_mont, curve).unwrap();
+                let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_ident_mont, curve).unwrap();
+                let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
             });
 
-            // Verify: from_mont → to_affine (same as bugrepro)
-            println!("  verifying prl-identg-4x results...");
-            for i in 0..4 {
-                let prl_pt = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
-                let prl_aff = prl_pt.from_mont(curve).to_affine(curve).unwrap();
-                let swc = sw_results[i].coordinates().unwrap();
-                let ok = prl_aff.x().to_bytes() == swc.x().to_repr().as_ref()
-                    && prl_aff.y().to_bytes() == swc.y().to_repr().as_ref();
+            // 4× PRL — distinct SRS bases
+            let bases_srs_mont: Vec<FujiAffine> = bases_srs.iter().map(|base| {
+                let coords = base.coordinates().unwrap();
+                let mut xb = [0u8; 32]; xb.copy_from_slice(coords.x().to_repr().as_ref());
+                let mut yb = [0u8; 32]; yb.copy_from_slice(coords.y().to_repr().as_ref());
+                FujiAffine::from_coordinates(
+                    FujiField::from_bytes(&xb).to_mont(curve),
+                    FujiField::from_bytes(&yb).to_mont(curve),
+                )
+            }).collect();
+            timed("prl-srs-4x", k, || {
+                let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_srs_mont, curve).unwrap();
+                let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_srs_mont, curve).unwrap();
+                let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_srs_mont, curve).unwrap();
+                let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_srs_mont, curve).unwrap();
+            });
 
-                if ok {
-                    println!("  ✅ poly[{}] MATCH", i);
-                } else {
-                    println!(
-                        "  ❌ MISMATCH poly[{}]: SW ({:02x?}.., {:02x?}..) != PRL ({:02x?}.., {:02x?}..)",
-                        i,
-                        &swc.x().to_repr().as_ref()[..4],
-                        &swc.y().to_repr().as_ref()[..4],
-                        &prl_aff.x().to_bytes()[..4],
-                        &prl_aff.y().to_bytes()[..4],
-                    );
-                }
-            }
+            // Batch PRL — single prl_msm_batch call with repeated bases
+            let all_scalars: Vec<FujiField> = scalars_fuji.iter().flat_map(|s| s.iter().copied()).collect();
+            let all_bases: Vec<FujiAffine> = bases_srs_mont.iter().copied()
+                .chain(bases_srs_mont.iter().copied())
+                .chain(bases_srs_mont.iter().copied())
+                .chain(bases_srs_mont.iter().copied())
+                .collect();
+            timed("prl-batch-4x", k, || {
+                let _r = fuji::msm::prl_msm_batch(
+                    &[n as i32; 4],
+                    &all_bases,
+                    &all_scalars,
+                    curve,
+                ).unwrap();
+            });
         }
     }
 }
