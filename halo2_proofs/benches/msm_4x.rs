@@ -100,26 +100,14 @@ fn main() {
                 }
             });
 
-            // Verify: convert SW to Mont and compare against PRL's Mont result bytes
+            // Verify: from_mont → to_affine (same as bugrepro)
             println!("  verifying prl-identg-4x results...");
             for i in 0..4 {
                 let prl_pt = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
+                let prl_aff = prl_pt.from_mont(curve).to_affine(curve).unwrap();
                 let swc = sw_results[i].coordinates().unwrap();
-                // Convert SW normal-form result to Mont for comparison (field_to_fuji + to_mont)
-                let sw_x = {
-                    let repr = swc.x().to_repr();
-                    let mut buf = [0u8; 32];
-                    buf.copy_from_slice(repr.as_ref());
-                    FujiField::from_bytes(&buf).to_mont(curve)
-                };
-                let sw_y = {
-                    let repr = swc.y().to_repr();
-                    let mut buf = [0u8; 32];
-                    buf.copy_from_slice(repr.as_ref());
-                    FujiField::from_bytes(&buf).to_mont(curve)
-                };
-                let ok = prl_pt.x_limbs() == sw_x.to_bytes().as_ref()
-                    && prl_pt.y_limbs() == sw_y.to_bytes().as_ref();
+                let ok = prl_aff.x().to_bytes() == swc.x().to_repr().as_ref()
+                    && prl_aff.y().to_bytes() == swc.y().to_repr().as_ref();
 
                 if ok {
                     println!("  ✅ poly[{}] MATCH", i);
@@ -127,10 +115,10 @@ fn main() {
                     println!(
                         "  ❌ MISMATCH poly[{}]: SW ({:02x?}.., {:02x?}..) != PRL ({:02x?}.., {:02x?}..)",
                         i,
-                        &sw_x.to_bytes()[..4],
-                        &sw_y.to_bytes()[..4],
-                        &prl_pt.x_limbs()[..4],
-                        &prl_pt.y_limbs()[..4],
+                        &swc.x().to_repr().as_ref()[..4],
+                        &swc.y().to_repr().as_ref()[..4],
+                        &prl_aff.x().to_bytes()[..4],
+                        &prl_aff.y().to_bytes()[..4],
                     );
                 }
             }

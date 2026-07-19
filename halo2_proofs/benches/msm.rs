@@ -157,22 +157,12 @@ fn bench_msm(c: &mut Criterion) {
                 ).unwrap();
                 let sw_pt = best_multiexp(&[s], &[g_ep_aff]);
                 let sw_aff = sw_pt.to_affine();
-                let sw_x = {
-                    let r = sw_aff.coordinates().unwrap().x().to_repr();
-                    let mut buf = [0u8; 32];
-                    buf.copy_from_slice(r.as_ref());
-                    fuji::FujiField::from_bytes(&buf).to_mont(curve)
-                };
-                let sw_y = {
-                    let r = sw_aff.coordinates().unwrap().y().to_repr();
-                    let mut buf = [0u8; 32];
-                    buf.copy_from_slice(r.as_ref());
-                    fuji::FujiField::from_bytes(&buf).to_mont(curve)
-                };
 
                 let r2 = fuji::msm::prl_pippenger(&[s_norm], &[g_mont], curve).unwrap();
-                let match_ok = r2.x_limbs() == sw_x.to_bytes().as_ref()
-                    && r2.y_limbs() == sw_y.to_bytes().as_ref();
+                // Compare via from_mont → to_affine (same as bugrepro)
+                let r2_aff = r2.from_mont(curve).to_affine(curve).unwrap();
+                let match_ok = r2_aff.x().to_bytes() == sw_aff.coordinates().unwrap().x().to_repr().as_ref()
+                    && r2_aff.y().to_bytes() == sw_aff.coordinates().unwrap().y().to_repr().as_ref();
                 eprintln!("prl vs best_multiexp (random scalar): {}", if match_ok { "✓ MATCH" } else { "✗ MISMATCH" });
 
                 if !match_ok {
