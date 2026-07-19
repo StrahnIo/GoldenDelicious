@@ -33,15 +33,15 @@ See [GUIDE_DEV.md](GUIDE_DEV.md) for full development setup instructions.
 Quick start:
 
 ```bash
-# Link the Fuji crate
+# Link the Fuji crate from https://github.com/StrahnIo/FUJI
 ln -s /path/to/fuji_repo/rust fuji
 
-# Place the precompiled binary
+# Place the precompiled binary (downloaded from releases)
 mkdir libfuji && cp /path/to/libfuji_c.a libfuji/
 
 # Build and bench
 export FUJI_LIB_DIR=$PWD/libfuji
-cargo bench --features fuji --bench msm
+RAYON_NUM_THREADS=4 rustup run stable cargo bench --features fuji --bench msm_4x
 ```
 
 ## Status
