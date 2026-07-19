@@ -37,7 +37,25 @@ fn main() {
 
         // ── SW with identical G base (Pallas generator) ──
         let gen_affine = <pasta_curves::Ep as group::Group>::generator().to_affine();
+        let gen_bytes = gen_affine.coordinates().unwrap();
+        eprintln!("/// Generator G coordinates (Fp, LE bytes):");
+        eprintln!("///   x = {:02x?}", gen_bytes.x().to_repr().as_ref());
+        eprintln!("///   y = {:02x?}", gen_bytes.y().to_repr().as_ref());
         let ident_bases_ep: Vec<EpAffine> = (0..n).map(|_| gen_affine).collect();
+
+        // Dump scalars for SW-identg-4x (first 8 of each set)
+        for set in 0..4 {
+            eprintln!("/// SW-identg-4x scalars set {} (Fq, LE bytes):", set);
+            for (j, s) in coeffs[set].iter().take(8).enumerate() {
+                eprintln!("///   [{}] = {:02x?}", j, s.to_repr().as_ref());
+            }
+            eprintln!("///   ... ({} total, showing first 8)", coeffs[set].len());
+        }
+
+        // Dump generator base (same for all)
+        eprintln!("/// SW-identg-4x base (EpAffine, LE bytes, all identical):");
+        eprintln!("///   x = {:02x?}", gen_bytes.x().to_repr().as_ref());
+        eprintln!("///   y = {:02x?}", gen_bytes.y().to_repr().as_ref());
 
         // Compute SW-identg results for verification
         let sw_results: Vec<EpAffine> = (0..4)
@@ -74,15 +92,16 @@ fn main() {
                 })
                 .collect();
 
-            timed("prl-identg-4x", k, || {
-                for i in 0..4 {
-                    let _ = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
-                }
-            });
+            // timed("prl-identg-4x", k, || {
+            //     for i in 0..4 {
+            //         let _ = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
+            //     }
+            // });
 
             // Verify each PRL result against SW (compare raw from_mont bytes, like bugrepro)
             println!("  verifying prl-identg-4x results...");
             for i in 0..4 {
+                println!("\nStarting iteration {}\n", i);
                 let prl_pt = fuji::msm::prl_pippenger(&ident_scalars[i], &ident_bases, curve).unwrap();
                 let prl_norm = prl_pt.from_mont(curve);
                 let sw_affine = &sw_results[i];
