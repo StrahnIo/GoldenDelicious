@@ -7,6 +7,8 @@ use super::{Coeff, LagrangeCoeff, Polynomial};
 use crate::arithmetic::{best_fft, best_multiexp, parallelize, CurveAffine, CurveExt};
 use crate::helpers::CurveRead;
 
+#[cfg(feature = "fuji")]
+use fuji::{FujiAffine, FujiField, FujiCurve};
 use ff::{Field, PrimeField};
 use group::{prime::PrimeCurveAffine, Curve, Group};
 use std::ops::{Add, AddAssign, Mul, MulAssign};
@@ -22,7 +24,7 @@ pub use verifier::{verify_proof, Accumulator, Guard};
 use std::io;
 
 /// These are the public parameters for the polynomial commitment scheme.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Params<C: CurveAffine> {
     pub(crate) k: u32,
     pub(crate) n: u64,
@@ -30,6 +32,23 @@ pub struct Params<C: CurveAffine> {
     pub(crate) g_lagrange: Vec<C>,
     pub(crate) w: C,
     pub(crate) u: C,
+    #[cfg(feature = "fuji")]
+    pub(crate) fuji_srs: Option<fuji::SrsContext>,
+}
+
+impl<C: CurveAffine> Clone for Params<C> {
+    fn clone(&self) -> Self {
+        Params {
+            k: self.k,
+            n: self.n,
+            g: self.g.clone(),
+            g_lagrange: self.g_lagrange.clone(),
+            w: self.w,
+            u: self.u,
+            #[cfg(feature = "fuji")]
+            fuji_srs: Option::<fuji::SrsContext>::None,
+        }
+    }
 }
 
 impl<C: CurveAffine> Params<C> {
@@ -103,6 +122,25 @@ impl<C: CurveAffine> Params<C> {
         let w = hasher(&[1]).to_affine();
         let u = hasher(&[2]).to_affine();
 
+        #[cfg(feature = "fuji")]
+        let fuji_srs = {
+            if crate::arithmetic::fuji::fuji_available() {
+                let curve = FujiCurve::Pallas;
+                let g_mont: Vec<FujiAffine> = g.iter().map(|p| {
+                    let coords = p.coordinates().unwrap();
+                    let mut xb = [0u8; 32]; xb.copy_from_slice(coords.x().to_repr().as_ref());
+                    let mut yb = [0u8; 32]; yb.copy_from_slice(coords.y().to_repr().as_ref());
+                    FujiAffine::from_coordinates(
+                        FujiField::from_bytes(&xb).to_mont(curve),
+                        FujiField::from_bytes(&yb).to_mont(curve),
+                    )
+                }).collect();
+                fuji::SrsContext::precompute(&g_mont, curve).ok()
+            } else {
+                None
+            }
+        };
+
         Params {
             k,
             n,
@@ -110,6 +148,8 @@ impl<C: CurveAffine> Params<C> {
             g_lagrange,
             w,
             u,
+            #[cfg(feature = "fuji")]
+            fuji_srs,
         }
     }
 
@@ -279,6 +319,8 @@ impl<C: CurveAffine> Params<C> {
             g_lagrange,
             w,
             u,
+            #[cfg(feature = "fuji")]
+            fuji_srs: Option::<fuji::SrsContext>::None,
         })
     }
 }

@@ -40,11 +40,11 @@ fn bench_msm(c: &mut Criterion) {
         {
             use halo2_proofs::poly::commitment::MSM;
 
-            // Fuji PRL — via MSM::eval()
+            // Fuji PRL — via MSM::eval() with random scalars
             group.bench_function(BenchmarkId::new("fuji-prl", k), |b| {
                 b.iter_with_setup(
                     || {
-                        let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
+                        let coeffs: Vec<Fq> = (0..(1 << k)).map(|_| Fq::random(OsRng)).collect();
                         let bases = params.get_g();
                         let mut msm = MSM::new(&params);
                         for (s, base) in coeffs.iter().zip(bases.iter()) {
