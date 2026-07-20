@@ -23,7 +23,7 @@ fn hex32(h: &[&str]) -> [u8; 32] {
 }
 
 fn main() {
-    for k in (10..15) {
+    for k in (11..15) {
         let pb_ = Instant::now();
         let params = Params::<EpAffine>::load_or_init(k);
         let pb_t = pb_.elapsed().as_secs_f64() * 1000.0;
