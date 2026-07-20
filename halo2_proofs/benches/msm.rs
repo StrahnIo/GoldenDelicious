@@ -195,6 +195,36 @@ fn bench_msm(c: &mut Criterion) {
                 });
             }
 
+            // PRL thru SRS — random scalars, distinct SRS (like sw)
+            {
+                let curve = fuji::FujiCurve::Pallas;
+                let n = 1 << k;
+                let bases_srs_mont: Vec<fuji::FujiAffine> = params.get_g().iter().map(|base| {
+                    let coords = base.coordinates().unwrap();
+                    let mut xb = [0u8; 32]; xb.copy_from_slice(coords.x().to_repr().as_ref());
+                    let mut yb = [0u8; 32]; yb.copy_from_slice(coords.y().to_repr().as_ref());
+                    fuji::FujiAffine::from_coordinates(
+                        fuji::FujiField::from_bytes(&xb).to_mont(curve),
+                        fuji::FujiField::from_bytes(&yb).to_mont(curve),
+                    )
+                }).collect();
+                let scalars: Vec<fuji::FujiField> = (0..n)
+                    .map(|_| {
+                        let s = Fq::random(OsRng);
+                        let b = s.to_repr();
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(b.as_ref());
+                        fuji::FujiField::from_bytes(&buf)
+                    })
+                    .collect();
+
+                group.bench_function(BenchmarkId::new("fuji-thru-srs", k), |b| {
+                    b.iter(|| {
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases_srs_mont, curve).unwrap());
+                    });
+                });
+            }
+
             // PRL thru identg — random scalars, identical G (verified in msm_4x)
             {
                 let curve = fuji::FujiCurve::Pallas;
