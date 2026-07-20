@@ -91,6 +91,32 @@ fn main() {
                 let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
             });
 
+            // PRL file-load — load scalars from PRL_SCALAR_FILE env var
+            if let Ok(path) = std::env::var("PRL_SCALAR_FILE") {
+                let path = std::path::Path::new(&path);
+                if path.exists() {
+                    let data = std::fs::read(path).unwrap();
+                    let n_file = data.len() / 32;
+                    eprintln!("  loading {} scalars from {:?}", n_file, path);
+                    let scalars_file: Vec<FujiField> = data.chunks(32).map(|chunk| {
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(chunk);
+                        FujiField::from_bytes(&buf)
+                    }).collect();
+                    let bases_file = vec![g_mont; n_file];
+
+                    let trials_file = if n_file >= 65536 { 3 } else { 10 };
+                    let start = std::time::Instant::now();
+                    for _ in 0..trials_file {
+                        let _ = fuji::msm::prl_pippenger(&scalars_file, &bases_file, curve).unwrap();
+                    }
+                    let elapsed_file = start.elapsed().as_secs_f64() / trials_file as f64;
+                    let throughput_file = (n_file as f64) / elapsed_file;
+                    println!("prl-load/k=??: {:>8.3} ms  {:>12.0} pts/s  n={}",
+                        elapsed_file * 1000.0, throughput_file, n_file);
+                }
+            }
+
             // PRL throughput — deterministic scalars, adaptive trials, built-in verification
             {
                 let scalars: Vec<FujiField> = (0..n).map(|i| {
