@@ -91,18 +91,37 @@ fn main() {
                 let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
             });
 
-            // 4× PRL sequential — time each MSM individually with from_mont → to_affine
+            // PRL throughput — deterministic scalars, adaptive trials, built-in verification
             {
-                let mut total = std::time::Duration::ZERO;
-                for i in 0..4 {
-                    let t0 = std::time::Instant::now();
-                    let r = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_ident_mont, curve).unwrap();
-                    let _aff = r.from_mont(curve).to_affine(curve).unwrap();
-                    total += t0.elapsed();
+                let scalars: Vec<FujiField> = (0..n).map(|i| {
+                    let mut b = [0u8; 32];
+                    b[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    FujiField::from_bytes(&b)
+                }).collect();
+                let bases = vec![g_mont; n];
+
+                // Warmup
+                let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+
+                let trials = if n >= 65536 { 3 } else { 10 };
+                let start = std::time::Instant::now();
+                for _ in 0..trials {
+                    let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
                 }
-                let avg = total / 4;
-                println!("prl-seq-4x/k={:<2}: {:>8.3} ms  (avg {:>8.3} ms)",
-                    k, total.as_secs_f64() * 1000.0, avg.as_secs_f64() * 1000.0);
+                let elapsed = start.elapsed().as_secs_f64() / trials as f64;
+                let throughput = (n as f64) / elapsed;
+
+                // Verify correctness: Σ i·G should equal sum·G
+                let sum = (n as u64 - 1) * (n as u64) / 2;
+                let mut sum_b = [0u8; 32];
+                sum_b[..8].copy_from_slice(&sum.to_le_bytes());
+                let ref_pt = fuji::msm::prl_pippenger(&[FujiField::from_bytes(&sum_b)], &[g_mont], curve).unwrap();
+                let pt = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+                let ok = pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
+                    == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+
+                println!("prl-thru/k={:<2}: {:>8.3} ms  {:>12.0} pts/s  correct: {}",
+                    k, elapsed * 1000.0, throughput, if ok { "✓" } else { "✗" });
             }
 
             // 4× PRL — distinct SRS bases
