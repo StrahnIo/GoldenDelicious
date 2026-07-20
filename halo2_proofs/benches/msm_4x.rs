@@ -143,6 +143,39 @@ fn main() {
                     k, elapsed * 1000.0, if ok { "✓" } else { "✗" });
             }
 
+            // PRL — 4× random ident G (same scalars as prl-identg-4x)
+            {
+                use group::Curve;
+                // Compute SW reference for first set
+                let g_ep_ref = pasta_curves::EpAffine::from_xy(
+                    -pasta_curves::Fp::one(),
+                    pasta_curves::Fp::from(2u64),
+                ).unwrap();
+                let sw_pt = best_multiexp(&coeffs[0], &vec![g_ep_ref; n]);
+                let sw_aff = sw_pt.to_affine();
+                let sw_x = sw_aff.coordinates().unwrap().x().to_repr();
+                let sw_y = sw_aff.coordinates().unwrap().y().to_repr();
+                let mut sw_xb = [0u8; 32]; sw_xb.copy_from_slice(sw_x.as_ref());
+                let mut sw_yb = [0u8; 32]; sw_yb.copy_from_slice(sw_y.as_ref());
+                let sw_mont_x = FujiField::from_bytes(&sw_xb).to_mont(curve);
+                let sw_mont_y = FujiField::from_bytes(&sw_yb).to_mont(curve);
+
+                let start = std::time::Instant::now();
+                for i in 0..4 {
+                    let _ = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_ident_mont, curve).unwrap();
+                }
+                let elapsed = start.elapsed().as_secs_f64();
+
+                // Verify first result against SW (from_mont → to_affine)
+                let r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_ident_mont, curve).unwrap();
+                let r0_aff = r0.from_mont(curve).to_affine(curve).unwrap();
+                let ok = r0_aff.x().to_bytes() == sw_x.as_ref()
+                    && r0_aff.y().to_bytes() == sw_y.as_ref();
+
+                println!("prl-thru-identg/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if ok { "✓" } else { "✗" });
+            }
+
             // 4× PRL — distinct SRS bases
             let bases_srs_mont: Vec<FujiAffine> = bases_srs.iter().map(|base| {
                 let coords = base.coordinates().unwrap();
