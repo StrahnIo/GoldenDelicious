@@ -13,7 +13,7 @@ fn bench_msm(c: &mut Criterion) {
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(200));
 
     for k in 11..12 {
-        let params = Params::<EpAffine>::new(k);
+        let params = Params::<EpAffine>::load_or_init(k);
 
         // SW — random scalars
         group.bench_function(BenchmarkId::new("sw", k), |b| {

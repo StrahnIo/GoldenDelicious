@@ -19,6 +19,7 @@ pub use msm::MSM;
 pub use prover::create_proof;
 pub use verifier::{verify_proof, Accumulator, Guard};
 
+use std::any::TypeId;
 use std::io;
 
 /// These are the public parameters for the polynomial commitment scheme.
@@ -280,6 +281,47 @@ impl<C: CurveAffine> Params<C> {
             w,
             u,
         })
+    }
+
+    /// Load params from cache or generate and cache them.
+    ///
+    /// Cache location is determined by the `CACHED_PARAMS` environment variable,
+    /// defaulting to `.cache/params/` relative to `CARGO_MANIFEST_DIR`.
+    pub fn load_or_init(k: u32) -> Self {
+        let cache_dir = std::env::var("CACHED_PARAMS").unwrap_or_else(|_| {
+            let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent().unwrap()
+                .join(".cache")
+                .join("params");
+            base.to_string_lossy().into_owned()
+        });
+
+        let curve_name = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
+            "pallas"
+        } else {
+            "vesta"
+        };
+        let path = std::path::Path::new(&cache_dir).join(format!("params_{}_k{}.bin", curve_name, k));
+
+        // Try loading from cache
+        if let Ok(mut file) = std::fs::File::open(&path) {
+            if let Ok(params) = Self::read(&mut file) {
+                return params;
+            }
+        }
+
+        // Generate params (slow: hashing to curve + FFT + normalization)
+        let params = Self::new(k);
+
+        // Cache for future runs
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::File::create(&path) {
+            let _ = params.write(&mut file);
+        }
+
+        params
     }
 }
 
