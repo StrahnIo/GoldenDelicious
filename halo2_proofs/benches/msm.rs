@@ -6,7 +6,11 @@ use halo2_proofs::pasta::{EpAffine, Fq};
 use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
 
-
+fn hex32(h: &[&str]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
+    out
+}
 
 fn bench_msm(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm");
@@ -94,11 +98,6 @@ fn bench_msm(c: &mut Criterion) {
                 use ff::PrimeField;
                 let curve = fuji::FujiCurve::Pallas;
                 // Build Mont-form generator from hex bytes (matches bugrepro exactly)
-                fn hex32(h: &[&str]) -> [u8; 32] {
-                    let mut out = [0u8; 32];
-                    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
-                    out
-                }
                 let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
                     "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
                 let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
@@ -108,32 +107,17 @@ fn bench_msm(c: &mut Criterion) {
                     fuji::FujiField::from_bytes(&gy).to_mont(curve),
                 );
 
-                // SW + PRL both use (-1, 2) via hex bytes (bugrepro-style)
-                let hex_bytes = |h: &[&str]| -> [u8; 32] {
-                    let mut out = [0u8; 32];
-                    for (i, s) in h.iter().enumerate() { out[i] = u8::from_str_radix(s, 16).unwrap(); }
-                    out
-                };
-                let gx = hex_bytes(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
-                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
-                let gy = hex_bytes(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
-                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
-                let g_mont = fuji::FujiAffine::from_coordinates(
-                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
-                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
-                );
-
                 // Debug: verify prl_pippenger against bugrepro's hardcoded expected bytes
-                let bugrepro_s = hex_bytes(&[
+                let bugrepro_s = hex32(&[
                     "83","2f","f0","92","7d","8a","da","ef","3a","e3","a5","12","ff","90","e9","76",
                     "02","4f","af","b4","34","70","b5","7b","4e","b0","61","b7","5f","a7","62","1c",
                 ]);
                 let bugrepro_snorm = fuji::FujiField::from_bytes(&bugrepro_s);
-                let expected_x = hex_bytes(&[
+                let expected_x = hex32(&[
                     "87","ba","b3","1a","20","18","be","dc","d3","78","42","62","24","b3","40","38",
                     "8e","22","9c","2b","63","46","74","1a","70","f7","05","bc","2d","3f","df","07",
                 ]);
-                let expected_y = hex_bytes(&[
+                let expected_y = hex32(&[
                     "34","73","b6","54","24","f7","8c","4b","6d","75","76","32","ae","a7","75","fe",
                     "9a","54","b4","dc","d8","30","f7","4e","5b","3f","03","47","2c","4e","55","26",
                 ]);
@@ -171,6 +155,72 @@ fn bench_msm(c: &mut Criterion) {
                 group.bench_function(BenchmarkId::new("fuji-1x", k), |b| {
                     b.iter(|| {
                         black_box(fuji::msm::prl_pippenger(&[s_norm], &[g_mont], curve).unwrap());
+                    });
+                });
+            }
+
+            // PRL thru — deterministic scalars, identical G (like prl-thru in msm_4x)
+            {
+                let curve = fuji::FujiCurve::Pallas;
+                let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+                let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+                let g_mont = fuji::FujiAffine::from_coordinates(
+                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
+                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
+                );
+                let n = 1 << k;
+                let scalars: Vec<fuji::FujiField> = (0..n).map(|i| {
+                    let mut b = [0u8; 32];
+                    b[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    fuji::FujiField::from_bytes(&b)
+                }).collect();
+                let bases = vec![g_mont; n];
+
+                // Verify: Σ i·G should equal sum·G
+                let sum = (n as u64 - 1) * (n as u64) / 2;
+                let mut sum_b = [0u8; 32];
+                sum_b[..8].copy_from_slice(&sum.to_le_bytes());
+                let ref_pt = fuji::msm::prl_pippenger(&[fuji::FujiField::from_bytes(&sum_b)], &[g_mont], curve).unwrap();
+                let pt = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+                let ok = pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
+                    == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+                eprintln!("prl-thru {}: correct: {}", k, if ok { "✓" } else { "✗" });
+
+                group.bench_function(BenchmarkId::new("fuji-thru", k), |b| {
+                    b.iter(|| {
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
+                    });
+                });
+            }
+
+            // PRL thru identg — random scalars, identical G (verified in msm_4x)
+            {
+                let curve = fuji::FujiCurve::Pallas;
+                let n = 1 << k;
+                let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+                let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+                let g_mont = fuji::FujiAffine::from_coordinates(
+                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
+                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
+                );
+                let bases = vec![g_mont; n];
+                let scalars: Vec<fuji::FujiField> = (0..n)
+                    .map(|_| {
+                        let s = Fq::random(OsRng);
+                        let b = s.to_repr();
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(b.as_ref());
+                        fuji::FujiField::from_bytes(&buf)
+                    })
+                    .collect();
+
+                group.bench_function(BenchmarkId::new("fuji-thru-identg", k), |b| {
+                    b.iter(|| {
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
                     });
                 });
             }
