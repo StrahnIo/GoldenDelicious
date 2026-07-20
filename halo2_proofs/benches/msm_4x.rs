@@ -91,6 +91,20 @@ fn main() {
                 let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
             });
 
+            // 4× PRL sequential — time each MSM individually with from_mont → to_affine
+            {
+                let mut total = std::time::Duration::ZERO;
+                for i in 0..4 {
+                    let t0 = std::time::Instant::now();
+                    let r = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_ident_mont, curve).unwrap();
+                    let _aff = r.from_mont(curve).to_affine(curve).unwrap();
+                    total += t0.elapsed();
+                }
+                let avg = total / 4;
+                println!("prl-seq-4x/k={:<2}: {:>8.3} ms  (avg {:>8.3} ms)",
+                    k, total.as_secs_f64() * 1000.0, avg.as_secs_f64() * 1000.0);
+            }
+
             // 4× PRL — distinct SRS bases
             let bases_srs_mont: Vec<FujiAffine> = bases_srs.iter().map(|base| {
                 let coords = base.coordinates().unwrap();
