@@ -105,19 +105,17 @@ fn main() {
                     }).collect();
                     let bases_file = vec![g_mont; n_file];
 
-                    let trials_file = if n_file >= 65536 { 3 } else { 10 };
                     let start = std::time::Instant::now();
-                    for _ in 0..trials_file {
+                    for _ in 0..4 {
                         let _ = fuji::msm::prl_pippenger(&scalars_file, &bases_file, curve).unwrap();
                     }
-                    let elapsed_file = start.elapsed().as_secs_f64() / trials_file as f64;
-                    let throughput_file = (n_file as f64) / elapsed_file;
-                    println!("prl-load/k=??: {:>8.3} ms  {:>12.0} pts/s  n={}",
-                        elapsed_file * 1000.0, throughput_file, n_file);
+                    let elapsed_file = start.elapsed().as_secs_f64();
+                    println!("prl-load/k=??: {:>8.3} ms  n={}",
+                        elapsed_file * 1000.0, n_file);
                 }
             }
 
-            // PRL throughput — deterministic scalars, adaptive trials, built-in verification
+            // PRL throughput — 4× deterministic scalars, built-in verification
             {
                 let scalars: Vec<FujiField> = (0..n).map(|i| {
                     let mut b = [0u8; 32];
@@ -126,16 +124,11 @@ fn main() {
                 }).collect();
                 let bases = vec![g_mont; n];
 
-                // Warmup
-                let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
-
-                let trials = if n >= 65536 { 3 } else { 10 };
                 let start = std::time::Instant::now();
-                for _ in 0..trials {
+                for _ in 0..4 {
                     let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
                 }
-                let elapsed = start.elapsed().as_secs_f64() / trials as f64;
-                let throughput = (n as f64) / elapsed;
+                let elapsed = start.elapsed().as_secs_f64();
 
                 // Verify correctness: Σ i·G should equal sum·G
                 let sum = (n as u64 - 1) * (n as u64) / 2;
@@ -146,8 +139,8 @@ fn main() {
                 let ok = pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
                     == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
 
-                println!("prl-thru/k={:<2}: {:>8.3} ms  {:>12.0} pts/s  correct: {}",
-                    k, elapsed * 1000.0, throughput, if ok { "✓" } else { "✗" });
+                println!("prl-thru/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if ok { "✓" } else { "✗" });
             }
 
             // 4× PRL — distinct SRS bases
