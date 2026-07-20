@@ -8,3 +8,4 @@
 /book/book
 .history/
 session-*.md
+.cache/

@@ -23,11 +23,11 @@ fn hex32(h: &[&str]) -> [u8; 32] {
 }
 
 fn main() {
-    for k in [16,17,18,19] {
+    for k in [11] {
         let pb_ = Instant::now();
-        let params = Params::<EpAffine>::new(k);
+        let params = Params::<EpAffine>::load_or_init(k);
         let pb_t = pb_.elapsed().as_secs_f64() * 1000.0;
-        println!("Params::<EpAffine>::new({}) took {} millis...", k, pb_t);
+        println!("Params::<EpAffine>::load_or_init({}) took {} millis...", k, pb_t);
         let n = 1 << k;
 
         // Generate 4 sets of random scalars
