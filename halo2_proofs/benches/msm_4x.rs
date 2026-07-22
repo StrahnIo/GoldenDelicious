@@ -23,7 +23,7 @@ fn hex32(h: &[&str]) -> [u8; 32] {
 }
 
 fn main() {
-    for k in (11..15) {
+    for k in (11..22) {
         let pb_ = Instant::now();
         let params = Params::<EpAffine>::load_or_init(k);
         let pb_t = pb_.elapsed().as_secs_f64() * 1000.0;
@@ -90,6 +90,155 @@ fn main() {
                 let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_ident_mont, curve).unwrap();
                 let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
             });
+
+            // PRL file-load — load scalars from PRL_SCALAR_FILE env var
+            if let Ok(path) = std::env::var("PRL_SCALAR_FILE") {
+                let path = std::path::Path::new(&path);
+                if path.exists() {
+                    let data = std::fs::read(path).unwrap();
+                    let n_file = data.len() / 32;
+                    eprintln!("  loading {} scalars from {:?}", n_file, path);
+                    let scalars_file: Vec<FujiField> = data.chunks(32).map(|chunk| {
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(chunk);
+                        FujiField::from_bytes(&buf)
+                    }).collect();
+                    let bases_file = vec![g_mont; n_file];
+
+                    let start = std::time::Instant::now();
+                    for _ in 0..4 {
+                        let _ = fuji::msm::prl_pippenger(&scalars_file, &bases_file, curve).unwrap();
+                    }
+                    let elapsed_file = start.elapsed().as_secs_f64();
+                    println!("prl-load/k=??: {:>8.3} ms  n={}",
+                        elapsed_file * 1000.0, n_file);
+                }
+            }
+
+            // 4× PRL — identical G fast path via fuji::msm::prl_fixed_batch_4
+            {
+                use fuji::FujiPoint;
+                let g_norm = fuji::FujiAffine::gen_pallas();
+                let flat_scalars: Vec<FujiField> = scalars_fuji.iter().flat_map(|s| s.iter().copied()).collect();
+                timed("prl-identg-fast-4x", k, || {
+                    let _r = fuji::msm::prl_fixed_batch_4(&flat_scalars, &g_norm, n as i32, curve).unwrap();
+                });
+            }
+
+            // 4× PRL — identical G fast path with correctness verification
+            {
+                use fuji::FujiPoint;
+                let g_norm = fuji::FujiAffine::gen_pallas();
+                // Use deterministic scalars for reproducible verification
+                let scalars_det: Vec<FujiField> = (0..n).map(|i| {
+                    let mut b = [0u8; 32];
+                    b[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    FujiField::from_bytes(&b)
+                }).collect();
+                let bases_mont = vec![g_mont; n];
+
+                // Compute sequential reference for each of the 4 MSMs
+                let refs: Vec<FujiPoint> = (0..4).map(|m| {
+                    let offset = m * n;
+                    let s: Vec<FujiField> = scalars_det.iter().map(|s| {
+                        let mut b = s.to_bytes();
+                        let mut v = u64::from_le_bytes(b[..8].try_into().unwrap());
+                        v += offset as u64;
+                        b[..8].copy_from_slice(&v.to_le_bytes());
+                        FujiField::from_bytes(&b)
+                    }).collect();
+                    fuji::msm::prl_pippenger(&s, &bases_mont, curve).unwrap()
+                }).collect();
+
+                // Build flat scalars for batch call: 4 × n
+                let mut flat_det: Vec<FujiField> = Vec::with_capacity(4 * n);
+                for m in 0..4 {
+                    let offset = m * n;
+                    for i in 0..n {
+                        let mut b = scalars_det[i].to_bytes();
+                        let mut v = u64::from_le_bytes(b[..8].try_into().unwrap());
+                        v += offset as u64;
+                        b[..8].copy_from_slice(&v.to_le_bytes());
+                        flat_det.push(FujiField::from_bytes(&b));
+                    }
+                }
+
+                let start = std::time::Instant::now();
+                let r = fuji::msm::prl_fixed_batch_4(&flat_det, &g_norm, n as i32, curve).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+
+                // Verify all 4 results match sequential references
+                let mut all_ok = true;
+                for m in 0..4 {
+                    let ok = r[m].from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
+                        == refs[m].from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+                    if !ok { all_ok = false; }
+                }
+
+                println!("prl-identg-fast-thru-4x/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if all_ok { "✓" } else { "✗" });
+            }
+
+            // PRL throughput — 4× deterministic scalars, built-in verification
+            {
+                let scalars: Vec<FujiField> = (0..n).map(|i| {
+                    let mut b = [0u8; 32];
+                    b[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    FujiField::from_bytes(&b)
+                }).collect();
+                let bases = vec![g_mont; n];
+
+                let start = std::time::Instant::now();
+                for _ in 0..4 {
+                    let _ = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+                }
+                let elapsed = start.elapsed().as_secs_f64();
+
+                // Verify correctness: Σ i·G should equal sum·G
+                let sum = (n as u64 - 1) * (n as u64) / 2;
+                let mut sum_b = [0u8; 32];
+                sum_b[..8].copy_from_slice(&sum.to_le_bytes());
+                let ref_pt = fuji::msm::prl_pippenger(&[FujiField::from_bytes(&sum_b)], &[g_mont], curve).unwrap();
+                let pt = fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap();
+                let ok = pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
+                    == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+
+                println!("prl-thru/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if ok { "✓" } else { "✗" });
+            }
+
+            // PRL — 4× random ident G (same scalars as prl-identg-4x)
+            {
+                use group::Curve;
+                // Compute SW reference for first set
+                let g_ep_ref = pasta_curves::EpAffine::from_xy(
+                    -pasta_curves::Fp::one(),
+                    pasta_curves::Fp::from(2u64),
+                ).unwrap();
+                let sw_pt = best_multiexp(&coeffs[0], &vec![g_ep_ref; n]);
+                let sw_aff = sw_pt.to_affine();
+                let sw_x = sw_aff.coordinates().unwrap().x().to_repr();
+                let sw_y = sw_aff.coordinates().unwrap().y().to_repr();
+                let mut sw_xb = [0u8; 32]; sw_xb.copy_from_slice(sw_x.as_ref());
+                let mut sw_yb = [0u8; 32]; sw_yb.copy_from_slice(sw_y.as_ref());
+                let sw_mont_x = FujiField::from_bytes(&sw_xb).to_mont(curve);
+                let sw_mont_y = FujiField::from_bytes(&sw_yb).to_mont(curve);
+
+                let start = std::time::Instant::now();
+                for i in 0..4 {
+                    let _ = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_ident_mont, curve).unwrap();
+                }
+                let elapsed = start.elapsed().as_secs_f64();
+
+                // Verify first result against SW (from_mont → to_affine)
+                let r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_ident_mont, curve).unwrap();
+                let r0_aff = r0.from_mont(curve).to_affine(curve).unwrap();
+                let ok = r0_aff.x().to_bytes() == sw_x.as_ref()
+                    && r0_aff.y().to_bytes() == sw_y.as_ref();
+
+                println!("prl-thru-identg/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if ok { "✓" } else { "✗" });
+            }
 
             // 4× PRL — distinct SRS bases
             let bases_srs_mont: Vec<FujiAffine> = bases_srs.iter().map(|base| {
