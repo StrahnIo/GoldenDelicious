@@ -16,7 +16,7 @@ fn bench_msm(c: &mut Criterion) {
     let mut group = c.benchmark_group("msm");
     group.sample_size(10).measurement_time(std::time::Duration::from_secs(2)).warm_up_time(std::time::Duration::from_millis(200));
 
-    for k in 11..12 {
+    for k in 20..21 {
         let params = Params::<EpAffine>::load_or_init(k);
 
         // SW — random scalars
@@ -78,7 +78,7 @@ fn bench_msm(c: &mut Criterion) {
             });
 
             // Fuji PRL — via MSM::eval()
-            group.bench_function(BenchmarkId::new("fuji-prl", k), |b| {
+            group.bench_function(BenchmarkId::new("fuji-prl: MSM::eval()", k), |b| {
                 b.iter_with_setup(
                     || {
                         let coeffs: Vec<Fq> = vec![Fq::ONE; 1 << k];
@@ -171,11 +171,21 @@ fn bench_msm(c: &mut Criterion) {
                     fuji::FujiField::from_bytes(&gy).to_mont(curve),
                 );
                 let n = 1 << k;
-                let scalars: Vec<fuji::FujiField> = (0..n).map(|i| {
-                    let mut b = [0u8; 32];
-                    b[..8].copy_from_slice(&(i as u64).to_le_bytes());
-                    fuji::FujiField::from_bytes(&b)
-                }).collect();
+                // let scalars: Vec<fuji::FujiField> = (0..n).map(|i| {
+                //     let mut b = [0u8; 32];
+                //     b[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                //     fuji::FujiField::from_bytes(&b)
+                // }).collect();
+                                let scalars: Vec<fuji::FujiField> = (0..n)
+                    .map(|_| {
+                        let s = Fq::random(OsRng);
+                        let b = s.to_repr();
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(b.as_ref());
+                        fuji::FujiField::from_bytes(&buf)
+                    })
+                    .collect();
+
                 let bases = vec![g_mont; n];
 
                 // Verify: Σ i·G should equal sum·G
@@ -189,6 +199,36 @@ fn bench_msm(c: &mut Criterion) {
                 eprintln!("prl-thru {}: correct: {}", k, if ok { "✓" } else { "✗" });
 
                 group.bench_function(BenchmarkId::new("fuji-thru", k), |b| {
+                    b.iter(|| {
+                        black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
+                    });
+                });
+            }
+
+            // PRL random — random scalars, identical G
+            {
+                let curve = fuji::FujiCurve::Pallas;
+                let n = 1 << k;
+                let gx = hex32(&["00","00","00","00","ed","30","2d","99","1b","f9","4c","09","fc","98","46","22",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","40"]);
+                let gy = hex32(&["02","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00",
+                    "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00"]);
+                let g_mont = fuji::FujiAffine::from_coordinates(
+                    fuji::FujiField::from_bytes(&gx).to_mont(curve),
+                    fuji::FujiField::from_bytes(&gy).to_mont(curve),
+                );
+                let bases = vec![g_mont; n];
+                let scalars: Vec<fuji::FujiField> = (0..n)
+                    .map(|_| {
+                        let s = Fq::random(OsRng);
+                        let b = s.to_repr();
+                        let mut buf = [0u8; 32];
+                        buf.copy_from_slice(b.as_ref());
+                        fuji::FujiField::from_bytes(&buf)
+                    })
+                    .collect();
+
+                group.bench_function(BenchmarkId::new("fuji-random", k), |b| {
                     b.iter(|| {
                         black_box(fuji::msm::prl_pippenger(&scalars, &bases, curve).unwrap());
                     });
