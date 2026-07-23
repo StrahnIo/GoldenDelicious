@@ -7,6 +7,21 @@ use halo2_proofs::pasta::{EpAffine, Fq};
 use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
 
+// ── Benchmark configuration ──────────────────────────────────────
+const K_RANGE: std::ops::Range<u32> = 11..21;
+
+const SW_4X: bool = true;
+const SW_IDENTG_4X: bool = false;
+const PRL_IDENTG_4X: bool = false;
+const PRL_LOAD: bool = false;
+const PRL_IDENTG_FAST_4X: bool = false;
+const PRL_IDENTG_FAST_THRU_4X: bool = false;
+const PRL_THRU: bool = false;
+const PRL_THRU_IDENTG: bool = false;
+const PRL_SRS_4X: bool = false;
+const PRL_SRS_BATCH_4X: bool = true;
+const PRL_BATCH_4X: bool = false;
+
 fn timed(label: &str, k: u32, f: impl Fn()) {
     let start = Instant::now();
     f();
@@ -23,11 +38,11 @@ fn hex32(h: &[&str]) -> [u8; 32] {
 }
 
 fn main() {
-    for k in (11..22) {
+    for k in K_RANGE {
         let pb_ = Instant::now();
         let params = Params::<EpAffine>::load_or_init(k);
         let pb_t = pb_.elapsed().as_secs_f64() * 1000.0;
-        println!("Params::<EpAffine>::load_or_init({}) took {} millis...", k, pb_t);
+        println!("\nParams::<EpAffine>::load_or_init({}) took {} millis...", k, pb_t);
         let n = 1 << k;
 
         // Generate 4 sets of random scalars
@@ -47,26 +62,31 @@ fn main() {
 
         // 4× SW — sequential best_multiexp calls (distinct SRS bases)
         let bases_srs = params.get_g();
-        timed("sw-4x", k, || {
-            let _r0 = best_multiexp(&coeffs[0], &bases_srs);
-            let _r1 = best_multiexp(&coeffs[1], &bases_srs);
-            let _r2 = best_multiexp(&coeffs[2], &bases_srs);
-            let _r3 = best_multiexp(&coeffs[3], &bases_srs);
-        });
+        if SW_4X {
+            timed("sw-4x", k, || {
+                let _r0 = best_multiexp(&coeffs[0], &bases_srs);
+                let _r1 = best_multiexp(&coeffs[1], &bases_srs);
+                let _r2 = best_multiexp(&coeffs[2], &bases_srs);
+                let _r3 = best_multiexp(&coeffs[3], &bases_srs);
+            });
+        }
 
         // 4× SW — identical G base, random scalars
         let bases_ident_ep: Vec<EpAffine> = (0..n).map(|_| g_ep).collect();
-        timed("sw-identg-4x", k, || {
-            let _r0 = best_multiexp(&coeffs[0], &bases_ident_ep);
-            let _r1 = best_multiexp(&coeffs[1], &bases_ident_ep);
-            let _r2 = best_multiexp(&coeffs[2], &bases_ident_ep);
-            let _r3 = best_multiexp(&coeffs[3], &bases_ident_ep);
-        });
+        if SW_IDENTG_4X {
+            timed("sw-identg-4x", k, || {
+                let _r0 = best_multiexp(&coeffs[0], &bases_ident_ep);
+                let _r1 = best_multiexp(&coeffs[1], &bases_ident_ep);
+                let _r2 = best_multiexp(&coeffs[2], &bases_ident_ep);
+                let _r3 = best_multiexp(&coeffs[3], &bases_ident_ep);
+            });
+        }
 
         #[cfg(feature = "fuji")]
         {
             use fuji::{FujiAffine, FujiField, FujiCurve};
             let curve = FujiCurve::Pallas;
+            let _ = curve; // suppress unused warning when all benches are off
 
             // Pre-convert scalars to FujiField (normal form)
             let scalars_fuji: Vec<Vec<FujiField>> = coeffs.iter().map(|c| {
@@ -84,39 +104,43 @@ fn main() {
                 FujiField::from_bytes(&gy).to_mont(curve),
             );
             let bases_ident_mont: Vec<FujiAffine> = (0..n).map(|_| g_mont).collect();
-            timed("prl-identg-4x", k, || {
-                let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_ident_mont, curve).unwrap();
-                let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_ident_mont, curve).unwrap();
-                let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_ident_mont, curve).unwrap();
-                let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
-            });
+            if PRL_IDENTG_4X {
+                timed("prl-identg-4x", k, || {
+                    let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_ident_mont, curve).unwrap();
+                    let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_ident_mont, curve).unwrap();
+                    let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_ident_mont, curve).unwrap();
+                    let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_ident_mont, curve).unwrap();
+                });
+            }
 
             // PRL file-load — load scalars from PRL_SCALAR_FILE env var
-            if let Ok(path) = std::env::var("PRL_SCALAR_FILE") {
-                let path = std::path::Path::new(&path);
-                if path.exists() {
-                    let data = std::fs::read(path).unwrap();
-                    let n_file = data.len() / 32;
-                    eprintln!("  loading {} scalars from {:?}", n_file, path);
-                    let scalars_file: Vec<FujiField> = data.chunks(32).map(|chunk| {
-                        let mut buf = [0u8; 32];
-                        buf.copy_from_slice(chunk);
-                        FujiField::from_bytes(&buf)
-                    }).collect();
-                    let bases_file = vec![g_mont; n_file];
+            if PRL_LOAD {
+                if let Ok(path_str) = std::env::var("PRL_SCALAR_FILE") {
+                    let path = std::path::Path::new(&path_str);
+                    if path.exists() {
+                        let data = std::fs::read(path).unwrap();
+                        let n_file = data.len() / 32;
+                        eprintln!("  loading {} scalars from {:?}", n_file, path);
+                        let scalars_file: Vec<FujiField> = data.chunks(32).map(|chunk| {
+                            let mut buf = [0u8; 32];
+                            buf.copy_from_slice(chunk);
+                            FujiField::from_bytes(&buf)
+                        }).collect();
+                        let bases_file = vec![g_mont; n_file];
 
-                    let start = std::time::Instant::now();
-                    for _ in 0..4 {
-                        let _ = fuji::msm::prl_pippenger(&scalars_file, &bases_file, curve).unwrap();
+                        let start = std::time::Instant::now();
+                        for _ in 0..4 {
+                            let _ = fuji::msm::prl_pippenger(&scalars_file, &bases_file, curve).unwrap();
+                        }
+                        let elapsed_file = start.elapsed().as_secs_f64();
+                        println!("prl-load/k=??: {:>8.3} ms  n={}",
+                            elapsed_file * 1000.0, n_file);
                     }
-                    let elapsed_file = start.elapsed().as_secs_f64();
-                    println!("prl-load/k=??: {:>8.3} ms  n={}",
-                        elapsed_file * 1000.0, n_file);
                 }
             }
 
             // 4× PRL — identical G fast path via fuji::msm::prl_fixed_batch_4
-            {
+            if PRL_IDENTG_FAST_4X {
                 use fuji::FujiPoint;
                 let g_norm = fuji::FujiAffine::gen_pallas();
                 let flat_scalars: Vec<FujiField> = scalars_fuji.iter().flat_map(|s| s.iter().copied()).collect();
@@ -126,7 +150,7 @@ fn main() {
             }
 
             // 4× PRL — identical G fast path with correctness verification
-            {
+            if PRL_IDENTG_FAST_THRU_4X {
                 use fuji::FujiPoint;
                 let g_norm = fuji::FujiAffine::gen_pallas();
                 // Use deterministic scalars for reproducible verification
@@ -180,6 +204,7 @@ fn main() {
             }
 
             // PRL throughput — 4× deterministic scalars, built-in verification
+            if PRL_THRU
             {
                 let scalars: Vec<FujiField> = (0..n).map(|i| {
                     let mut b = [0u8; 32];
@@ -208,7 +233,7 @@ fn main() {
             }
 
             // PRL — 4× random ident G (same scalars as prl-identg-4x)
-            {
+            if PRL_THRU_IDENTG {
                 use group::Curve;
                 // Compute SW reference for first set
                 let g_ep_ref = pasta_curves::EpAffine::from_xy(
@@ -250,12 +275,33 @@ fn main() {
                     FujiField::from_bytes(&yb).to_mont(curve),
                 )
             }).collect();
-            timed("prl-srs-4x", k, || {
-                let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_srs_mont, curve).unwrap();
-                let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_srs_mont, curve).unwrap();
-                let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_srs_mont, curve).unwrap();
-                let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_srs_mont, curve).unwrap();
-            });
+            if PRL_SRS_4X {
+                timed("prl-srs-4x", k, || {
+                    let _r0 = fuji::msm::prl_pippenger(&scalars_fuji[0], &bases_srs_mont, curve).unwrap();
+                    let _r1 = fuji::msm::prl_pippenger(&scalars_fuji[1], &bases_srs_mont, curve).unwrap();
+                    let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_srs_mont, curve).unwrap();
+                    let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_srs_mont, curve).unwrap();
+                });
+            }
+
+            // 4× PRL — batch-4 with distinct SRS bases + correctness verification
+            if PRL_SRS_BATCH_4X {
+                let flat_scalars: Vec<FujiField> = scalars_fuji.iter().flat_map(|s| s.iter().copied()).collect();
+                let start = std::time::Instant::now();
+                let r = fuji::msm::prl_pippenger_batch_4(&flat_scalars, &bases_srs_mont, curve).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+
+                // Verify all 4 results against sequential prl_pippenger
+                let mut all_ok = true;
+                for i in 0..4 {
+                    let ref_pt = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_srs_mont, curve).unwrap();
+                    let ok = r[i].from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
+                        == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+                    if !ok { all_ok = false; }
+                }
+                println!("prl-srs-batch-4x/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if all_ok { "✓" } else { "✗" });
+            }
 
             // Batch PRL — single prl_msm_batch call with repeated bases
             let all_scalars: Vec<FujiField> = scalars_fuji.iter().flat_map(|s| s.iter().copied()).collect();
@@ -264,14 +310,16 @@ fn main() {
                 .chain(bases_srs_mont.iter().copied())
                 .chain(bases_srs_mont.iter().copied())
                 .collect();
-            timed("prl-batch-4x", k, || {
-                let _r = fuji::msm::prl_msm_batch(
-                    &[n as i32; 4],
-                    &all_bases,
-                    &all_scalars,
-                    curve,
-                ).unwrap();
-            });
+            if PRL_BATCH_4X {
+                timed("prl-batch-4x", k, || {
+                    let _r = fuji::msm::prl_msm_batch(
+                        &[n as i32; 4],
+                        &all_bases,
+                        &all_scalars,
+                        curve,
+                    ).unwrap();
+                });
+            }
         }
     }
 }
