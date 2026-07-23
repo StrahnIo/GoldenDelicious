@@ -243,6 +243,27 @@ where
     Some(fuji_point_to_curve::<C>(result, curve))
 }
 
+/// Like `try_multiexp` but takes pre-converted Montgomery-form bases.
+/// Skips the per-call Mont conversion loop entirely.
+pub(crate) fn try_multiexp_mont<C>(
+    coeffs: &[C::Scalar],
+    bases_mont: &[fuji::FujiAffine],
+) -> Option<C::Curve>
+where
+    C: CurveAffine,
+    C::Scalar: PrimeField,
+    C::Base: PrimeField,
+{
+    if !fuji_available() || coeffs.len() < 256 || coeffs.len() != bases_mont.len() {
+        return None;
+    }
+    let curve = FujiCurve::Pallas;
+
+    let scalars: Vec<fuji::FujiField> = coeffs.iter().map(field_to_fuji).collect();
+    let result = fuji::msm::prl_pippenger(&scalars, bases_mont, curve).ok()?;
+    Some(fuji_point_to_curve::<C>(result, curve))
+}
+
 fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,

@@ -31,6 +31,30 @@ pub struct Params<C: CurveAffine> {
     pub(crate) g_lagrange: Vec<C>,
     pub(crate) w: C,
     pub(crate) u: C,
+    #[cfg(feature = "fuji")]
+    pub(crate) g_mont: Vec<fuji::FujiAffine>,
+    #[cfg(feature = "fuji")]
+    pub(crate) g_lagrange_mont: Vec<fuji::FujiAffine>,
+    #[cfg(feature = "fuji")]
+    pub(crate) w_mont: fuji::FujiAffine,
+    #[cfg(feature = "fuji")]
+    pub(crate) u_mont: fuji::FujiAffine,
+}
+
+#[cfg(feature = "fuji")]
+fn curve_to_fuji_mont<C: CurveAffine>(base: &C, curve: fuji::FujiCurve) -> fuji::FujiAffine
+where C::Base: ff::PrimeField
+{
+    use fuji::{FujiAffine, FujiField};
+    let coords = base.coordinates().unwrap();
+    let x_bytes = coords.x().to_repr();
+    let y_bytes = coords.y().to_repr();
+    let mut xb = [0u8; 32]; xb[..x_bytes.as_ref().len()].copy_from_slice(x_bytes.as_ref());
+    let mut yb = [0u8; 32]; yb[..y_bytes.as_ref().len()].copy_from_slice(y_bytes.as_ref());
+    FujiAffine::from_coordinates(
+        FujiField::from_bytes(&xb).to_mont(curve),
+        FujiField::from_bytes(&yb).to_mont(curve),
+    )
 }
 
 impl<C: CurveAffine> Params<C> {
@@ -104,6 +128,23 @@ impl<C: CurveAffine> Params<C> {
         let w = hasher(&[1]).to_affine();
         let u = hasher(&[2]).to_affine();
 
+        #[cfg(feature = "fuji")]
+        let mont_cache = {
+            let curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
+                fuji::FujiCurve::Pallas
+            } else {
+                fuji::FujiCurve::Vesta
+            };
+            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
+            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
+            let w_mont = curve_to_fuji_mont(&w, curve);
+            let u_mont = curve_to_fuji_mont(&u, curve);
+            (g_mont, g_lagrange_mont, w_mont, u_mont)
+        };
+
+        #[cfg(feature = "fuji")]
+        let (g_mont, g_lagrange_mont, w_mont, u_mont) = mont_cache;
+
         Params {
             k,
             n,
@@ -111,6 +152,14 @@ impl<C: CurveAffine> Params<C> {
             g_lagrange,
             w,
             u,
+            #[cfg(feature = "fuji")]
+            g_mont,
+            #[cfg(feature = "fuji")]
+            g_lagrange_mont,
+            #[cfg(feature = "fuji")]
+            w_mont,
+            #[cfg(feature = "fuji")]
+            u_mont,
         }
     }
 
@@ -122,26 +171,26 @@ impl<C: CurveAffine> Params<C> {
         C::Scalar: ff::PrimeField,
         C::Base: ff::PrimeField,
     {
-        let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
-        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
-
-        tmp_scalars.extend(poly.iter());
-        tmp_scalars.push(r.0);
-
-        tmp_bases.extend(self.g.iter());
-        tmp_bases.push(self.w);
+        let mut scalars = Vec::with_capacity(poly.len() + 1);
+        scalars.extend(poly.iter());
+        scalars.push(r.0);
 
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                let bases_mont: Vec<_> = self.g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
+                if let Some(result) = fuji::try_multiexp_mont::<C>(&scalars, &bases_mont) {
                     return result;
                 }
             }
         }
 
-        best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+        // Fallback: build normal bases and use best_multiexp
+        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
+        tmp_bases.extend(self.g.iter());
+        tmp_bases.push(self.w);
+        best_multiexp::<C>(&scalars, &tmp_bases)
     }
 
     /// Commits to multiple polynomials in coefficient form in a single batch.
@@ -181,26 +230,26 @@ impl<C: CurveAffine> Params<C> {
         C::Scalar: ff::PrimeField,
         C::Base: ff::PrimeField,
     {
-        let mut tmp_scalars = Vec::with_capacity(poly.len() + 1);
-        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
-
-        tmp_scalars.extend(poly.iter());
-        tmp_scalars.push(r.0);
-
-        tmp_bases.extend(self.g_lagrange.iter());
-        tmp_bases.push(self.w);
+        let mut scalars = Vec::with_capacity(poly.len() + 1);
+        scalars.extend(poly.iter());
+        scalars.push(r.0);
 
         #[cfg(feature = "fuji")]
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
-                if let Some(result) = fuji::try_multiexp::<C>(&tmp_scalars, &tmp_bases) {
+                let bases_mont: Vec<_> = self.g_lagrange_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
+                if let Some(result) = fuji::try_multiexp_mont::<C>(&scalars, &bases_mont) {
                     return result;
                 }
             }
         }
 
-        best_multiexp::<C>(&tmp_scalars, &tmp_bases)
+        // Fallback: build normal bases and use best_multiexp
+        let mut tmp_bases = Vec::with_capacity(poly.len() + 1);
+        tmp_bases.extend(self.g_lagrange.iter());
+        tmp_bases.push(self.w);
+        best_multiexp::<C>(&scalars, &tmp_bases)
     }
 
     /// Commits to multiple polynomials in Lagrange form in a single batch.
@@ -273,6 +322,23 @@ impl<C: CurveAffine> Params<C> {
         let w = C::read(reader)?;
         let u = C::read(reader)?;
 
+        #[cfg(feature = "fuji")]
+        let mont_cache = {
+            let curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
+                fuji::FujiCurve::Pallas
+            } else {
+                fuji::FujiCurve::Vesta
+            };
+            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
+            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
+            let w_mont = curve_to_fuji_mont(&w, curve);
+            let u_mont = curve_to_fuji_mont(&u, curve);
+            (g_mont, g_lagrange_mont, w_mont, u_mont)
+        };
+
+        #[cfg(feature = "fuji")]
+        let (g_mont, g_lagrange_mont, w_mont, u_mont) = mont_cache;
+
         Ok(Params {
             k,
             n,
@@ -280,6 +346,14 @@ impl<C: CurveAffine> Params<C> {
             g_lagrange,
             w,
             u,
+            #[cfg(feature = "fuji")]
+            g_mont,
+            #[cfg(feature = "fuji")]
+            g_lagrange_mont,
+            #[cfg(feature = "fuji")]
+            w_mont,
+            #[cfg(feature = "fuji")]
+            u_mont,
         })
     }
 
