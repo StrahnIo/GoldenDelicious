@@ -287,10 +287,8 @@ impl<C: CurveAffine> Params<C> {
         MSM::new(self)
     }
 
-    /// Batch-4 Fuji MSM: groups N polynomials into chunks of 4, pads any
-    /// partial chunk with zero scalars, and dispatches to
-    /// prl_pippenger_batch_4. Near-zero overhead because Pippenger skips
-    /// zero-bucket entries, producing identity points for the padded slots.
+    /// Batch-n Fuji MSM for coefficient polynomial batches.
+    /// Uses prl_pippenger_batch_n which handles n=1..4 efficiently.
     #[cfg(feature = "fuji")]
     fn commit_batch_fuji(
         &self,
@@ -305,34 +303,28 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_mont;
         let mut results = Vec::with_capacity(polys.len());
-        let zero_fuji = fuji::FujiField::zero();
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
-            let actual = pchunk.len();
-            let total = 4usize;
+            let n_msms = pchunk.len();
 
-            let mut flat = Vec::with_capacity(total * (n + 1));
+            let mut flat = Vec::with_capacity(n_msms * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
                 flat.extend(poly.iter().map(field_to_fuji));
                 flat.push(field_to_fuji(&blind.0));
             }
-            for _ in actual..total {
-                flat.extend(std::iter::repeat(zero_fuji).take(n));
-                flat.push(zero_fuji);
-            }
 
             let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
-            let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, self.fuji_curve).unwrap();
-            for pt in outs.iter().take(actual) {
-                results.push(fuji_point_to_curve::<C>(*pt, self.fuji_curve));
+            let outs = ::fuji::msm::prl_pippenger_batch_n(&flat, &bases, n_msms, self.fuji_curve).unwrap();
+            for pt in outs {
+                results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
             }
         }
         results
     }
 
-    /// Batch-4 Fuji MSM for Lagrange coefficient polynomials. Pads partial
-    /// chunks to 4 with zero scalars, same as `commit_batch_fuji`.
+    /// Batch-n Fuji MSM for Lagrange coefficient polynomials.
+    /// Uses prl_pippenger_batch_n which handles n=1..4 efficiently.
     #[cfg(feature = "fuji")]
     fn commit_batch_lagrange_fuji(
         &self,
@@ -347,27 +339,21 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_lagrange_mont;
         let mut results = Vec::with_capacity(polys.len());
-        let zero_fuji = fuji::FujiField::zero();
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
-            let actual = pchunk.len();
-            let total = 4usize;
+            let n_msms = pchunk.len();
 
-            let mut flat = Vec::with_capacity(total * (n + 1));
+            let mut flat = Vec::with_capacity(n_msms * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
                 flat.extend(poly.iter().map(field_to_fuji));
                 flat.push(field_to_fuji(&blind.0));
             }
-            for _ in actual..total {
-                flat.extend(std::iter::repeat(zero_fuji).take(n));
-                flat.push(zero_fuji);
-            }
 
             let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
-            let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, self.fuji_curve).unwrap();
-            for pt in outs.iter().take(actual) {
-                results.push(fuji_point_to_curve::<C>(*pt, self.fuji_curve));
+            let outs = ::fuji::msm::prl_pippenger_batch_n(&flat, &bases, n_msms, self.fuji_curve).unwrap();
+            for pt in outs {
+                results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
             }
         }
         results
