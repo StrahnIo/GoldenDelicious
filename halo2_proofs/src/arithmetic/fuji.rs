@@ -4,7 +4,11 @@ use fuji::{FujiCurve, FujiError};
 use group::Group;
 
 pub fn fuji_available() -> bool {
-    fuji::prl::prl_available()
+    let avail = fuji::prl::prl_available();
+    if std::env::var("FUJI_DEBUG").is_ok() {
+        eprintln!("[fuji] fuji_available() = {}", avail);
+    }
+    avail
 }
 
 pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
