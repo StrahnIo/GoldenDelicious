@@ -8,7 +8,7 @@ use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
 
 // ── Benchmark configuration ──────────────────────────────────────
-const K_RANGE: std::ops::Range<u32> = 11..21;
+const K_RANGE: std::ops::Range<u32> = 7..11;
 
 const SW_4X: bool = true;
 const SW_IDENTG_4X: bool = false;

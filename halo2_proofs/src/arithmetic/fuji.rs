@@ -7,7 +7,7 @@ pub fn fuji_available() -> bool {
     fuji::prl::prl_available()
 }
 
-fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
+pub(crate) fn field_to_fuji<S: PrimeField>(s: &S) -> fuji::FujiField {
     let repr = s.to_repr();
     let bytes: &[u8] = repr.as_ref();
     let mut buf = [0u8; 32];
@@ -264,7 +264,7 @@ where
     Some(fuji_point_to_curve::<C>(result, curve))
 }
 
-fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
+pub(crate) fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,
     C::Base: PrimeField,

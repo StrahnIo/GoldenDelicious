@@ -211,6 +211,14 @@ impl<C: CurveAffine> Params<C> {
             return Vec::new();
         }
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 && polys.len() >= 4 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                return self.commit_batch_fuji(polys, r);
+            }
+        }
+
         polys
             .iter()
             .zip(r.iter())
@@ -270,6 +278,14 @@ impl<C: CurveAffine> Params<C> {
             return Vec::new();
         }
 
+        #[cfg(feature = "fuji")]
+        if self.n >= 64 && polys.len() >= 4 {
+            use crate::arithmetic::fuji;
+            if fuji::fuji_available() {
+                return self.commit_batch_lagrange_fuji(polys, r);
+            }
+        }
+
         polys
             .iter()
             .zip(r.iter())
@@ -281,6 +297,83 @@ impl<C: CurveAffine> Params<C> {
     /// appropriate params.
     pub fn empty_msm(&self) -> MSM<'_, C> {
         MSM::new(self)
+    }
+
+    /// Batch-4 Fuji MSM: groups N polynomials into chunks of 4, calls
+    /// prl_pippenger_batch_4 with cached Mont-form bases.
+    #[cfg(feature = "fuji")]
+    fn commit_batch_fuji(
+        &self,
+        polys: &[&Polynomial<C::Scalar, Coeff>],
+        r: &[Blind<C::Scalar>],
+    ) -> Vec<C::Curve>
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
+        use crate::arithmetic::fuji::{field_to_fuji, fuji_point_to_curve};
+        let n = self.n as usize;
+        let g_mont = &self.g_mont;
+        let mut results = Vec::with_capacity(polys.len());
+
+        for chunk in polys.chunks(4).zip(r.chunks(4)) {
+            let (pchunk, rchunk) = chunk;
+            if pchunk.len() < 4 {
+                for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
+                    results.push(self.commit(poly, *blind));
+                }
+            } else {
+                let mut flat = Vec::with_capacity(4 * (n + 1));
+                for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
+                    flat.extend(poly.iter().map(field_to_fuji));
+                    flat.push(field_to_fuji(&blind.0));
+                }
+                let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
+                let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, ::fuji::FujiCurve::Pallas).unwrap();
+                for pt in outs {
+                    results.push(fuji_point_to_curve::<C>(pt, ::fuji::FujiCurve::Pallas));
+                }
+            }
+        }
+        results
+    }
+
+    /// Batch-4 Fuji MSM for Lagrange coefficient polynomials.
+    #[cfg(feature = "fuji")]
+    fn commit_batch_lagrange_fuji(
+        &self,
+        polys: &[&Polynomial<C::Scalar, LagrangeCoeff>],
+        r: &[Blind<C::Scalar>],
+    ) -> Vec<C::Curve>
+    where
+        C::Scalar: ff::PrimeField,
+        C::Base: ff::PrimeField,
+    {
+        use crate::arithmetic::fuji::{field_to_fuji, fuji_point_to_curve};
+        let n = self.n as usize;
+        let g_mont = &self.g_lagrange_mont;
+        let mut results = Vec::with_capacity(polys.len());
+
+        for chunk in polys.chunks(4).zip(r.chunks(4)) {
+            let (pchunk, rchunk) = chunk;
+            if pchunk.len() < 4 {
+                for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
+                    results.push(self.commit_lagrange(poly, *blind));
+                }
+            } else {
+                let mut flat = Vec::with_capacity(4 * (n + 1));
+                for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
+                    flat.extend(poly.iter().map(field_to_fuji));
+                    flat.push(field_to_fuji(&blind.0));
+                }
+                let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
+                let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, ::fuji::FujiCurve::Pallas).unwrap();
+                for pt in outs {
+                    results.push(fuji_point_to_curve::<C>(pt, ::fuji::FujiCurve::Pallas));
+                }
+            }
+        }
+        results
     }
 
     /// Getter for g generators
