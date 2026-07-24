@@ -210,60 +210,6 @@ fn single_bucket_add(
     Ok(())
 }
 
-/// PRL-accelerated MSM using Apple's C library Pippenger.
-/// Bases are converted to Montgomery form; scalars stay in normal form.
-/// The C library handles all bucket fill, reduction, and combination
-/// using pure PRL (prl::mul_3x) — zero Montgomery conversions during the pipeline.
-pub(crate) fn try_multiexp<C>(
-    coeffs: &[C::Scalar],
-    bases: &[C],
-) -> Option<C::Curve>
-where
-    C: CurveAffine,
-    C::Scalar: PrimeField,
-    C::Base: PrimeField,
-{
-    if !fuji_available() || coeffs.len() < 256 || coeffs.len() != bases.len() {
-        return None;
-    }
-    let curve = FujiCurve::Pallas;
-
-    let scalars: Vec<fuji::FujiField> = coeffs.iter().map(field_to_fuji).collect();
-    let bases_mont: Vec<fuji::FujiAffine> = bases
-        .iter()
-        .map(|b| {
-            let coords = b.coordinates().unwrap();
-            let x = field_to_fuji(coords.x()).to_mont(curve);
-            let y = field_to_fuji(coords.y()).to_mont(curve);
-            fuji::FujiAffine::from_coordinates(x, y)
-        })
-        .collect();
-
-    let result = fuji::msm::prl_pippenger(&scalars, &bases_mont, curve).ok()?;
-    Some(fuji_point_to_curve::<C>(result, curve))
-}
-
-/// Like `try_multiexp` but takes pre-converted Montgomery-form bases.
-/// Skips the per-call Mont conversion loop entirely.
-pub(crate) fn try_multiexp_mont<C>(
-    coeffs: &[C::Scalar],
-    bases_mont: &[fuji::FujiAffine],
-) -> Option<C::Curve>
-where
-    C: CurveAffine,
-    C::Scalar: PrimeField,
-    C::Base: PrimeField,
-{
-    if !fuji_available() || coeffs.len() < 256 || coeffs.len() != bases_mont.len() {
-        return None;
-    }
-    let curve = FujiCurve::Pallas;
-
-    let scalars: Vec<fuji::FujiField> = coeffs.iter().map(field_to_fuji).collect();
-    let result = fuji::msm::prl_pippenger(&scalars, bases_mont, curve).ok()?;
-    Some(fuji_point_to_curve::<C>(result, curve))
-}
-
 pub(crate) fn fuji_point_to_curve<C>(pt: fuji::FujiPoint, curve: FujiCurve) -> C::Curve
 where
     C: CurveAffine,
@@ -335,37 +281,6 @@ mod tests {
         let bep = [g_ep, g_ep, g_ep];
         let expected = best_multiexp::<pasta_curves::EpAffine>(&sfq, &bep);
         eq_g_ep(&result, curve, &expected);
-    }
-
-    #[test]
-    fn test_try_multiexp_simple_256() {
-        use ff::Field;
-        let params = crate::poly::commitment::Params::<pasta_curves::EpAffine>::new(8);
-        let bases: Vec<pasta_curves::EpAffine> = params.get_g();
-        let coeffs = vec![pasta_curves::Fq::ONE; 256];
-        let result = try_multiexp::<pasta_curves::EpAffine>(&coeffs, &bases).unwrap();
-        use crate::arithmetic::best_multiexp;
-        let expected = best_multiexp::<pasta_curves::EpAffine>(&coeffs, &bases);
-        assert_eq!(result, expected, "try_multiexp 256*G != software");
-    }
-
-    #[test]
-    #[ignore = "Apple prl_pippenger: random multi-window scalars need further debug"]
-    fn test_try_multiexp_256_random() {
-        // Random multi-window scalars — Apple's prl_pippenger handles these correctly.
-        use pasta_curves::{EpAffine, Fq};
-        use ff::Field as _;
-        use rand_core::OsRng;
-
-        let n = 256;
-        let params = crate::poly::commitment::Params::<EpAffine>::new(8);
-        let bases: Vec<EpAffine> = params.get_g();
-        let coeffs: Vec<Fq> = (0..n).map(|_| Fq::random(OsRng)).collect();
-
-        let result = try_multiexp::<EpAffine>(&coeffs, &bases).unwrap();
-        use crate::arithmetic::best_multiexp;
-        let expected = best_multiexp::<EpAffine>(&coeffs, &bases);
-        assert_eq!(result, expected);
     }
 
     #[test]
