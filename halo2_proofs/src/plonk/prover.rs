@@ -71,6 +71,7 @@ pub fn create_proof<
         pub instance_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
         pub instance_polys: Vec<Polynomial<C::Scalar, Coeff>>,
         pub instance_cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>,
+        pub instance_blinds: Vec<Blind<C::Scalar>>,
     }
 
     let instance: Vec<InstanceSingle<C>> = instances
@@ -90,21 +91,8 @@ pub fn create_proof<
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let instance_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> =
-                instance_values.iter().collect();
             let instance_blinds: Vec<Blind<C::Scalar>> =
                 (0..instance_values.len()).map(|_| Blind::default()).collect();
-            let instance_commitments_projective =
-                params.commit_batch_lagrange(&instance_refs, &instance_blinds);
-            let mut instance_commitments =
-                vec![C::identity(); instance_commitments_projective.len()];
-            C::Curve::batch_normalize(&instance_commitments_projective, &mut instance_commitments);
-            let instance_commitments = instance_commitments;
-            drop(instance_commitments_projective);
-
-            for commitment in &instance_commitments {
-                transcript.common_point(*commitment)?;
-            }
 
             let instance_polys: Vec<_> = instance_values
                 .iter()
@@ -123,6 +111,7 @@ pub fn create_proof<
                 instance_values,
                 instance_polys,
                 instance_cosets,
+                instance_blinds,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -299,22 +288,11 @@ pub fn create_proof<
                 }
             }
 
-            // Compute commitments to advice column polynomials
+            // Compute blinding factors for advice column polynomials
             let advice_blinds: Vec<_> = advice
                 .iter()
                 .map(|_| Blind(C::Scalar::random(&mut rng)))
                 .collect();
-            let advice_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> = advice.iter().collect();
-            let advice_commitments_projective =
-                params.commit_batch_lagrange(&advice_refs, &advice_blinds);
-            let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
-            C::Curve::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
-            let advice_commitments = advice_commitments;
-            drop(advice_commitments_projective);
-
-            for commitment in &advice_commitments {
-                transcript.write_point(*commitment)?;
-            }
 
             let advice_polys: Vec<_> = advice
                 .clone()
@@ -335,6 +313,34 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    // Batch-commit instance and advice columns per circuit (Round 0).
+    // Consolidated into a single commit_batch_lagrange call so all
+    // polynomials benefit from Fuji batch-4 MSM.
+    for (instance, advice) in instance.iter().zip(advice.iter()) {
+        let num_instances = instance.instance_values.len();
+        let mut all_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> =
+            Vec::with_capacity(num_instances + advice.advice_values.len());
+        let mut all_blinds = Vec::with_capacity(all_refs.capacity());
+
+        all_refs.extend(instance.instance_values.iter());
+        all_blinds.extend(instance.instance_blinds.iter().copied());
+
+        all_refs.extend(advice.advice_values.iter());
+        all_blinds.extend(advice.advice_blinds.iter().copied());
+
+        let commitments_projective = params.commit_batch_lagrange(&all_refs, &all_blinds);
+        let mut commitments = vec![C::identity(); commitments_projective.len()];
+        C::Curve::batch_normalize(&commitments_projective, &mut commitments);
+
+        // Transcript-write in original order: instances first, then advice
+        for c in commitments.iter().take(num_instances) {
+            transcript.common_point(*c)?;
+        }
+        for c in commitments.iter().skip(num_instances) {
+            transcript.write_point(*c)?;
+        }
+    }
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
