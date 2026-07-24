@@ -465,7 +465,7 @@ pub fn create_proof<
     // Sample gamma challenge
     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
-    // Commit to permutations.
+    // Commit to permutations (deferred — no MSM yet, just compute polys).
     let permutations: Vec<permutation::prover::Committed<C, _>> = instance
         .iter()
         .zip(advice.iter())
@@ -481,7 +481,6 @@ pub fn create_proof<
                 gamma,
                 &mut coset_evaluator,
                 &mut rng,
-                transcript,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -489,7 +488,7 @@ pub fn create_proof<
     let lookups: Vec<Vec<lookup::prover::Committed<C, _>>> = lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
-            // Construct and commit to products for each lookup
+            // Construct and commit to products for each lookup (deferred)
             lookups
                 .into_iter()
                 .map(|lookup| {
@@ -500,15 +499,60 @@ pub fn create_proof<
                         gamma,
                         &mut coset_evaluator,
                         &mut rng,
-                        transcript,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Commit to the vanishing argument's random polynomial for blinding h(x_3)
-    let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
+    // Commit to the vanishing argument's random polynomial (deferred)
+    let vanishing = vanishing::Argument::commit(domain, &mut rng);
+
+    // Batch-commit Round 2 polys (permutation products + lookup products + vanishing blinding).
+    // In transcript order: permutation products first, then lookup products, then vanishing blinding.
+    {
+        // Batch A: Lagrange-form commitments (permutation products + lookup products)
+        let mut lagrange_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> = Vec::new();
+        let mut lagrange_blinds = Vec::new();
+        // Track how many permuation polys we have (to slice results correctly)
+        let num_perm_polys: usize = permutations.iter().map(|p| p.sets.len()).sum();
+
+        for perm in &permutations {
+            for set in &perm.sets {
+                lagrange_refs.push(&set.permutation_product_values);
+                lagrange_blinds.push(set.permutation_product_blind);
+            }
+        }
+        for lookups in &lookups {
+            for lookup in lookups {
+                lagrange_refs.push(&lookup.product_values);
+                lagrange_blinds.push(lookup.product_blind);
+            }
+        }
+
+        let commits_projective =
+            params.commit_batch_lagrange(&lagrange_refs, &lagrange_blinds);
+        let mut commits = vec![C::identity(); commits_projective.len()];
+        C::Curve::batch_normalize(&commits_projective, &mut commits);
+
+        // Transcript: permutation products
+        for c in commits.iter().take(num_perm_polys) {
+            transcript.write_point(*c)?;
+        }
+        // Transcript: lookup products
+        for c in commits.iter().skip(num_perm_polys) {
+            transcript.write_point(*c)?;
+        }
+    }
+
+    // Batch B: coefficient-form commitment (vanishing blinding poly)
+    {
+        let poly_refs = [&vanishing.random_poly];
+        let blind_refs = [vanishing.random_blind];
+        let commits_projective = params.commit_batch(&poly_refs, &blind_refs);
+        let c = commits_projective[0].to_affine();
+        transcript.write_point(c)?;
+    }
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();

@@ -18,8 +18,8 @@ use crate::{
 };
 
 pub(in crate::plonk) struct Committed<C: CurveAffine> {
-    random_poly: Polynomial<C::Scalar, Coeff>,
-    random_blind: Blind<C::Scalar>,
+    pub(in crate::plonk) random_poly: Polynomial<C::Scalar, Coeff>,
+    pub(in crate::plonk) random_blind: Blind<C::Scalar>,
 }
 
 pub(in crate::plonk) struct Constructed<C: CurveAffine> {
@@ -35,12 +35,10 @@ pub(in crate::plonk) struct Evaluated<C: CurveAffine> {
 }
 
 impl<C: CurveAffine> Argument<C> {
-    pub(in crate::plonk) fn commit<E: EncodedChallenge<C>, R: RngCore, T: TranscriptWrite<C, E>>(
-        params: &Params<C>,
+    pub(in crate::plonk) fn commit<R: RngCore>(
         domain: &EvaluationDomain<C::Scalar>,
         mut rng: R,
-        transcript: &mut T,
-    ) -> Result<Committed<C>, Error> {
+    ) -> Committed<C> {
         // Sample a random polynomial of degree n - 1
         let mut random_poly = domain.empty_coeff();
         for coeff in random_poly.iter_mut() {
@@ -49,14 +47,10 @@ impl<C: CurveAffine> Argument<C> {
         // Sample a random blinding factor
         let random_blind = Blind(C::Scalar::random(rng));
 
-        // Commit
-        let c = params.commit(&random_poly, random_blind).to_affine();
-        transcript.write_point(c)?;
-
-        Ok(Committed {
+        Committed {
             random_poly,
             random_blind,
-        })
+        }
     }
 }
 
