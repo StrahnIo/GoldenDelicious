@@ -8,7 +8,7 @@ use halo2_proofs::poly::commitment::Params;
 use rand_core::OsRng;
 
 // ── Benchmark configuration ──────────────────────────────────────
-const K_RANGE: std::ops::Range<u32> = 7..11;
+const K_RANGE: std::ops::Range<u32> = 4..18;
 
 const SW_4X: bool = true;
 const SW_IDENTG_4X: bool = false;
@@ -291,12 +291,14 @@ fn main() {
                 let r = fuji::msm::prl_pippenger_batch_4(&flat_scalars, &bases_srs_mont, curve).unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
 
-                // Verify all 4 results against sequential prl_pippenger
+                // Verify all 4 results against best_multiexp (SW ground truth)
                 let mut all_ok = true;
                 for i in 0..4 {
-                    let ref_pt = fuji::msm::prl_pippenger(&scalars_fuji[i], &bases_srs_mont, curve).unwrap();
-                    let ok = r[i].from_mont(curve).to_affine(curve).unwrap().x().to_bytes()
-                        == ref_pt.from_mont(curve).to_affine(curve).unwrap().x().to_bytes();
+                    let sw_pt = best_multiexp(&coeffs[i], &bases_srs);
+                    let sw_aff = sw_pt.to_affine();
+                    let sw_x = sw_aff.coordinates().unwrap().x().to_repr();
+                    let r_aff = r[i].from_mont(curve).to_affine(curve).unwrap();
+                    let ok = r_aff.x().to_bytes() == sw_x.as_ref();
                     if !ok { all_ok = false; }
                 }
                 println!("prl-srs-batch-4x/k={:<2}: {:>8.3} ms  correct: {}",
