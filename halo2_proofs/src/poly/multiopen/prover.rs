@@ -94,7 +94,8 @@ where
         .unwrap();
 
     let q_prime_blind = Blind(C::Scalar::random(&mut rng));
-    let q_prime_commitment = params.commit(&q_prime_poly, q_prime_blind).to_affine();
+    let q_prime_commitment =
+        params.commit_batch(&[&q_prime_poly], &[q_prime_blind])[0].to_affine();
 
     transcript.write_point(q_prime_commitment)?;
 
