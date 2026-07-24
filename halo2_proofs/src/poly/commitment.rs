@@ -215,8 +215,17 @@ impl<C: CurveAffine> Params<C> {
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
+                #[cfg(feature = "fuji")]
+                if std::env::var("FUJI_DEBUG").is_ok() {
+                    eprintln!("[fuji] commit_batch: n={} polys={} k={}", self.n, polys.len(), self.k);
+                }
                 return self.commit_batch_fuji(polys, r);
             }
+        }
+
+        #[cfg(feature = "fuji")]
+        if std::env::var("FUJI_DEBUG").is_ok() {
+            eprintln!("[fuji] commit_batch: FUJI SKIP n={} polys={} k={}", self.n, polys.len(), self.k);
         }
 
         polys
@@ -270,8 +279,17 @@ impl<C: CurveAffine> Params<C> {
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
+                #[cfg(feature = "fuji")]
+                if std::env::var("FUJI_DEBUG").is_ok() {
+                    eprintln!("[fuji] commit_batch_lagrange: n={} polys={} k={}", self.n, polys.len(), self.k);
+                }
                 return self.commit_batch_lagrange_fuji(polys, r);
             }
+        }
+
+        #[cfg(feature = "fuji")]
+        if std::env::var("FUJI_DEBUG").is_ok() {
+            eprintln!("[fuji] commit_batch_lagrange: FUJI SKIP n={} polys={} k={}", self.n, polys.len(), self.k);
         }
 
         polys
@@ -308,6 +326,10 @@ impl<C: CurveAffine> Params<C> {
             let (pchunk, rchunk) = chunk;
             let n_msms = pchunk.len();
 
+            if std::env::var("FUJI_DEBUG").is_ok() {
+                eprintln!("[fuji] commit_batch_fuji: chunk n_msms={} n={}", n_msms, n);
+            }
+
             let mut flat = Vec::with_capacity(n_msms * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
                 flat.extend(poly.iter().map(field_to_fuji));
@@ -343,6 +365,10 @@ impl<C: CurveAffine> Params<C> {
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
             let n_msms = pchunk.len();
+
+            if std::env::var("FUJI_DEBUG").is_ok() {
+                eprintln!("[fuji] commit_batch_lagrange_fuji: chunk n_msms={} n={}", n_msms, n);
+            }
 
             let mut flat = Vec::with_capacity(n_msms * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
