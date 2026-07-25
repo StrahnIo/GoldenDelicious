@@ -156,75 +156,76 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             }
         }
 
-        fn recurse<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
+        fn recurse_into<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
+            out: &mut [F],
             ast: &Ast<E, F, B>,
             ctx: &AstContext<'_, F, B>,
             counters: &[AtomicU64; 7],
-        ) -> Vec<F> {
+            stack: &mut [Vec<F>],
+        ) {
             match ast {
                 Ast::Poly(leaf) => {
                     count(counters, 0);
-                    B::get_chunk_of_rotated(
+                    B::get_chunk_of_rotated_into(
+                        out,
                         ctx.domain,
                         ctx.chunk_size,
                         ctx.chunk_index,
                         &ctx.polys[leaf.index],
                         leaf.rotation,
-                    )
+                    );
                 }
                 Ast::Add(a, b) => {
                     count(counters, 1);
-                    let mut lhs = recurse(a, ctx, counters);
-                    let rhs = recurse(b, ctx, counters);
-                    for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
-                        *lhs += *rhs;
+                    recurse_into(out, b, ctx, counters, stack);
+                    let (first, rest) = stack.split_at_mut(1);
+                    recurse_into(&mut first[0], a, ctx, counters, rest);
+                    for i in 0..out.len() {
+                        out[i] += first[0][i];
                     }
-                    lhs
                 }
                 Ast::Mul(AstMul(a, b)) => {
                     count(counters, 2);
-                    let mut lhs = recurse(a, ctx, counters);
-                    let rhs = recurse(b, ctx, counters);
-                    for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
-                        *lhs *= *rhs;
+                    recurse_into(out, b, ctx, counters, stack);
+                    let (first, rest) = stack.split_at_mut(1);
+                    recurse_into(&mut first[0], a, ctx, counters, rest);
+                    for i in 0..out.len() {
+                        out[i] *= first[0][i];
                     }
-                    lhs
                 }
                 Ast::Scale(a, scalar) => {
                     count(counters, 3);
-                    let mut lhs = recurse(a, ctx, counters);
-                    for lhs in lhs.iter_mut() {
+                    recurse_into(out, a, ctx, counters, stack);
+                    for lhs in out.iter_mut() {
                         *lhs *= scalar;
                     }
-                    lhs
                 }
                 Ast::DistributePowers(terms, base) => {
                     count(counters, 4);
-                    terms.iter().fold(
-                        B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, F::ZERO),
-                        |mut acc, term| {
-                            let term = recurse(term, ctx, counters);
-                            for (acc, term) in acc.iter_mut().zip(term) {
-                                *acc *= base;
-                                *acc += term;
+                    let mut terms = terms.iter();
+                    if let Some(first_term) = terms.next() {
+                        recurse_into(out, first_term, ctx, counters, stack);
+                        for term in terms {
+                            for elem in out.iter_mut() {
+                                *elem *= base;
                             }
-                            acc
-                        },
-                    )
+                            let (first, rest) = stack.split_at_mut(1);
+                            recurse_into(&mut first[0], term, ctx, counters, rest);
+                            for i in 0..out.len() {
+                                out[i] += first[0][i];
+                            }
+                        }
+                    } else {
+                        out.fill(F::ZERO);
+                    }
                 }
                 Ast::LinearTerm(scalar) => {
                     count(counters, 5);
-                    B::linear_term(
-                        ctx.domain,
-                        ctx.poly_len,
-                        ctx.chunk_size,
-                        ctx.chunk_index,
-                        *scalar,
-                    )
+                    B::linear_term_into(out, ctx.domain, ctx.chunk_size, ctx.chunk_index, *scalar);
                 }
                 Ast::ConstantTerm(scalar) => {
                     count(counters, 6);
-                    B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, *scalar)
+                    B::constant_term_into(out, *scalar);
                 }
             }
         }
@@ -237,6 +238,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             AtomicU64::new(0),
         ];
         let counters_ref = &counters;
+        let depth = ast.depth();
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
             for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
@@ -248,7 +250,10 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                         chunk_index,
                         polys: &self.polys,
                     };
-                    out.copy_from_slice(&recurse(ast, &ctx, counters_ref));
+                    let mut scratch: Vec<Vec<F>> = (0..depth + 1)
+                        .map(|_| vec![F::ZERO; out.len()])
+                        .collect();
+                    recurse_into(out, ast, &ctx, counters_ref, &mut scratch[..]);
                 });
             }
         });
@@ -337,6 +342,16 @@ impl<E, F: Field, B: Basis> From<AstLeaf<E, B>> for Ast<E, F, B> {
 impl<E, F: Field, B: Basis> Ast<E, F, B> {
     pub(crate) fn one() -> Self {
         Self::ConstantTerm(F::ONE)
+    }
+
+    /// Maximum recursion depth of the AST — used to size the scratch buffer stack.
+    pub(crate) fn depth(&self) -> usize {
+        match self {
+            Ast::Poly(_) | Ast::LinearTerm(_) | Ast::ConstantTerm(_) => 0,
+            Ast::Scale(a, _) => a.depth(),
+            Ast::Add(a, b) | Ast::Mul(AstMul(a, b)) => 1 + a.depth().max(b.depth()),
+            Ast::DistributePowers(terms, _) => terms.iter().map(|t| t.depth()).max().unwrap_or(0),
+        }
     }
 }
 
@@ -501,6 +516,24 @@ pub(crate) trait BasisOps: Basis {
         poly: &Polynomial<F, Self>,
         rotation: Rotation,
     ) -> Vec<F>;
+
+    // ── _into variants (avoid Vec allocation) ─────────────────────
+    fn constant_term_into<F: Field>(out: &mut [F], scalar: F);
+    fn linear_term_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        scalar: F,
+    );
+    fn get_chunk_of_rotated_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        poly: &Polynomial<F, Self>,
+        rotation: Rotation,
+    );
 }
 
 impl BasisOps for Coeff {
@@ -523,6 +556,11 @@ impl BasisOps for Coeff {
         chunk
     }
 
+    fn constant_term_into<F: Field>(out: &mut [F], scalar: F) {
+        out.fill(F::ZERO);
+        out[0] = scalar;
+    }
+
     fn linear_term<F: WithSmallOrderMulGroup<3>>(
         _: &EvaluationDomain<F>,
         poly_len: usize,
@@ -531,18 +569,27 @@ impl BasisOps for Coeff {
         scalar: F,
     ) -> Vec<F> {
         let mut chunk = vec![F::ZERO; cmp::min(chunk_size, poly_len - chunk_size * chunk_index)];
-        // If the chunk size is 1 (e.g. if we have a small k and many threads), then the
-        // linear coefficient is the second chunk. Otherwise, the chunk size is greater
-        // than one, and the linear coefficient is the second element of the first chunk.
-        // Note that we check against the original chunk size, not the potentially-short
-        // actual size of the current chunk, because we want to know whether the size of
-        // the previous chunk was 1.
         if chunk_size == 1 && chunk_index == 1 {
             chunk[0] = scalar;
         } else if chunk_index == 0 {
             chunk[1] = scalar;
         }
         chunk
+    }
+
+    fn linear_term_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        _domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        scalar: F,
+    ) {
+        out.fill(F::ZERO);
+        if chunk_size == 1 && chunk_index == 1 {
+            out[0] = scalar;
+        } else if chunk_index == 0 && out.len() > 1 {
+            out[1] = scalar;
+        }
     }
 
     fn get_chunk_of_rotated<F: WithSmallOrderMulGroup<3>>(
@@ -552,6 +599,17 @@ impl BasisOps for Coeff {
         _: &Polynomial<F, Self>,
         _: Rotation,
     ) -> Vec<F> {
+        panic!("Can't rotate polynomials in the standard basis")
+    }
+
+    fn get_chunk_of_rotated_into<F: WithSmallOrderMulGroup<3>>(
+        _out: &mut [F],
+        _domain: &EvaluationDomain<F>,
+        _chunk_size: usize,
+        _chunk_index: usize,
+        _poly: &Polynomial<F, Self>,
+        _rotation: Rotation,
+    ) {
         panic!("Can't rotate polynomials in the standard basis")
     }
 }
@@ -572,6 +630,10 @@ impl BasisOps for LagrangeCoeff {
         vec![scalar; cmp::min(chunk_size, poly_len - chunk_size * chunk_index)]
     }
 
+    fn constant_term_into<F: Field>(out: &mut [F], scalar: F) {
+        out.fill(scalar);
+    }
+
     fn linear_term<F: WithSmallOrderMulGroup<3>>(
         domain: &EvaluationDomain<F>,
         poly_len: usize,
@@ -579,7 +641,6 @@ impl BasisOps for LagrangeCoeff {
         chunk_index: usize,
         scalar: F,
     ) -> Vec<F> {
-        // Take every power of omega within the chunk, and multiply by scalar.
         let omega = domain.get_omega();
         let start = chunk_size * chunk_index;
         (0..cmp::min(chunk_size, poly_len - start))
@@ -591,6 +652,20 @@ impl BasisOps for LagrangeCoeff {
             .collect()
     }
 
+    fn linear_term_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        scalar: F,
+    ) {
+        let omega = domain.get_omega();
+        let start = chunk_size * chunk_index;
+        for (i, elem) in out.iter_mut().enumerate() {
+            *elem = omega.pow_vartime([(start + i) as u64]) * scalar;
+        }
+    }
+
     fn get_chunk_of_rotated<F: WithSmallOrderMulGroup<3>>(
         _: &EvaluationDomain<F>,
         chunk_size: usize,
@@ -599,6 +674,23 @@ impl BasisOps for LagrangeCoeff {
         rotation: Rotation,
     ) -> Vec<F> {
         poly.get_chunk_of_rotated(rotation, chunk_size, chunk_index)
+    }
+
+    fn get_chunk_of_rotated_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        _domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        poly: &Polynomial<F, Self>,
+        rotation: Rotation,
+    ) {
+        poly.get_chunk_of_rotated_helper_into(
+            out,
+            rotation.0 < 0,
+            rotation.0.unsigned_abs() as usize,
+            chunk_size,
+            chunk_index,
+        );
     }
 }
 
@@ -618,6 +710,10 @@ impl BasisOps for ExtendedLagrangeCoeff {
         vec![scalar; cmp::min(chunk_size, poly_len - chunk_size * chunk_index)]
     }
 
+    fn constant_term_into<F: Field>(out: &mut [F], scalar: F) {
+        out.fill(scalar);
+    }
+
     fn linear_term<F: WithSmallOrderMulGroup<3>>(
         domain: &EvaluationDomain<F>,
         poly_len: usize,
@@ -625,7 +721,6 @@ impl BasisOps for ExtendedLagrangeCoeff {
         chunk_index: usize,
         scalar: F,
     ) -> Vec<F> {
-        // Take every power of the extended omega within the chunk, and multiply by scalar.
         let omega = domain.get_extended_omega();
         let start = chunk_size * chunk_index;
         (0..cmp::min(chunk_size, poly_len - start))
@@ -640,6 +735,20 @@ impl BasisOps for ExtendedLagrangeCoeff {
             .collect()
     }
 
+    fn linear_term_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        scalar: F,
+    ) {
+        let omega = domain.get_extended_omega();
+        let start = chunk_size * chunk_index;
+        for (i, elem) in out.iter_mut().enumerate() {
+            *elem = omega.pow_vartime([(start + i) as u64]) * F::ZETA * scalar;
+        }
+    }
+
     fn get_chunk_of_rotated<F: WithSmallOrderMulGroup<3>>(
         domain: &EvaluationDomain<F>,
         chunk_size: usize,
@@ -648,6 +757,17 @@ impl BasisOps for ExtendedLagrangeCoeff {
         rotation: Rotation,
     ) -> Vec<F> {
         domain.get_chunk_of_rotated_extended(poly, rotation, chunk_size, chunk_index)
+    }
+
+    fn get_chunk_of_rotated_into<F: WithSmallOrderMulGroup<3>>(
+        out: &mut [F],
+        domain: &EvaluationDomain<F>,
+        chunk_size: usize,
+        chunk_index: usize,
+        poly: &Polynomial<F, Self>,
+        rotation: Rotation,
+    ) {
+        domain.get_chunk_of_rotated_extended_into(out, poly, rotation, chunk_size, chunk_index);
     }
 }
 
