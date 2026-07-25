@@ -3,6 +3,7 @@ use group::Curve;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
+use std::time::Instant;
 
 use super::{
     circuit::{
@@ -58,6 +59,15 @@ pub fn create_proof<
 
     // Hash verification key into transcript
     pk.vk.hash_into(transcript)?;
+
+    let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
+    macro_rules! perf_phase {
+        ($name:expr) => {
+            if let Some(ref t) = _t0 {
+                eprintln!("[perf] {:35} {:.1}ms", $name, Instant::now().duration_since(*t).as_secs_f64() * 1000.0);
+            }
+        };
+    }
 
     let domain = &pk.vk.domain;
     let mut meta = ConstraintSystem::default();
@@ -126,6 +136,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("instance");
 
     struct AdviceSingle<C: CurveAffine> {
         pub advice_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
@@ -335,6 +346,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("synthesize + advice");
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
@@ -452,6 +464,7 @@ pub fn create_proof<
                 .collect()
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("lookup_permuted");
 
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
@@ -506,6 +519,7 @@ pub fn create_proof<
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
+    perf_phase!("round2_commit");
 
     // Evaluate the h(X) polynomial's constraint system expressions for the permutation constraints.
     let (permutations, permutation_expressions): (Vec<_>, Vec<_>) = permutations
@@ -594,6 +608,7 @@ pub fn create_proof<
         &mut rng,
         transcript,
     )?;
+    perf_phase!("vanishing_construct");
 
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n, 0, 0, 0]);
@@ -721,7 +736,9 @@ pub fn create_proof<
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
-    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)
+    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)?;
+    perf_phase!("create_proof_total");
+    Ok(())
 }
 
 #[test]
