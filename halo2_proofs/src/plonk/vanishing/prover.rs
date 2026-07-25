@@ -18,8 +18,8 @@ use crate::{
 };
 
 pub(in crate::plonk) struct Committed<C: CurveAffine> {
-    pub(in crate::plonk) random_poly: Polynomial<C::Scalar, Coeff>,
-    pub(in crate::plonk) random_blind: Blind<C::Scalar>,
+    random_poly: Polynomial<C::Scalar, Coeff>,
+    random_blind: Blind<C::Scalar>,
 }
 
 pub(in crate::plonk) struct Constructed<C: CurveAffine> {
@@ -35,10 +35,12 @@ pub(in crate::plonk) struct Evaluated<C: CurveAffine> {
 }
 
 impl<C: CurveAffine> Argument<C> {
-    pub(in crate::plonk) fn commit<R: RngCore>(
+    pub(in crate::plonk) fn commit<E: EncodedChallenge<C>, R: RngCore, T: TranscriptWrite<C, E>>(
+        params: &Params<C>,
         domain: &EvaluationDomain<C::Scalar>,
         mut rng: R,
-    ) -> Committed<C> {
+        transcript: &mut T,
+    ) -> Result<Committed<C>, Error> {
         // Sample a random polynomial of degree n - 1
         let mut random_poly = domain.empty_coeff();
         for coeff in random_poly.iter_mut() {
@@ -47,10 +49,14 @@ impl<C: CurveAffine> Argument<C> {
         // Sample a random blinding factor
         let random_blind = Blind(C::Scalar::random(rng));
 
-        Committed {
+        // Commit
+        let c = params.commit(&random_poly, random_blind).to_affine();
+        transcript.write_point(c)?;
+
+        Ok(Committed {
             random_poly,
             random_blind,
-        }
+        })
     }
 }
 
@@ -71,17 +77,23 @@ impl<C: CurveAffine> Committed<C> {
         mut rng: R,
         transcript: &mut T,
     ) -> Result<Constructed<C>, Error> {
-        // Evaluate the h(X) polynomial's constraint system expressions for the constraints provided
-        let h_poly = poly::Ast::distribute_powers(expressions, *y); // Fold the gates together with the y challenge
-        let h_poly = evaluator.evaluate(&h_poly, domain); // Evaluate the h(X) polynomial
+        let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+        let h_poly = poly::Ast::distribute_powers(expressions, *y);
+        if let Some(ref t0) = _t0 { eprintln!("[perf]   distribute_powers: {:.1}ms", t0.elapsed().as_secs_f64() * 1000.0); }
 
-        // Divide by t(X) = X^{params.n} - 1.
+        let _t1 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+        let h_poly = evaluator.evaluate(&h_poly, domain);
+        if let Some(ref t1) = _t1 { eprintln!("[perf]   evaluator_evaluate: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0); }
+
+        let _t2 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let h_poly = domain.divide_by_vanishing_poly(h_poly);
+        if let Some(ref t2) = _t2 { eprintln!("[perf]   divide_by_vanishing_poly: {:.1}ms", t2.elapsed().as_secs_f64() * 1000.0); }
 
-        // Obtain final h(X) polynomial
+        let _t3 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let h_poly = domain.extended_to_coeff(h_poly);
+        if let Some(ref t3) = _t3 { eprintln!("[perf]   extended_to_coeff: {:.1}ms", t3.elapsed().as_secs_f64() * 1000.0); }
 
-        // Split h(X) up into pieces
+        let _t4 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let h_pieces = h_poly
             .chunks_exact(params.n as usize)
             .map(|v| domain.coeff_from_vec(v.to_vec()))
@@ -92,14 +104,13 @@ impl<C: CurveAffine> Committed<C> {
             .map(|_| Blind(C::Scalar::random(&mut rng)))
             .collect();
 
-        // Compute commitments to each h(X) piece
         let h_refs: Vec<&Polynomial<C::Scalar, Coeff>> = h_pieces.iter().collect();
         let h_commitments_projective = params.commit_batch(&h_refs, &h_blinds);
         let mut h_commitments = vec![C::identity(); h_commitments_projective.len()];
         C::Curve::batch_normalize(&h_commitments_projective, &mut h_commitments);
         let h_commitments = h_commitments;
+        if let Some(ref t4) = _t4 { eprintln!("[perf]   h_split_blind_commit: {:.1}ms", t4.elapsed().as_secs_f64() * 1000.0); }
 
-        // Hash each h(X) piece
         for c in h_commitments.iter() {
             transcript.write_point(*c)?;
         }

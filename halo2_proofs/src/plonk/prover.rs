@@ -3,6 +3,7 @@ use group::Curve;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
+use std::time::Instant;
 
 use super::{
     circuit::{
@@ -59,6 +60,15 @@ pub fn create_proof<
     // Hash verification key into transcript
     pk.vk.hash_into(transcript)?;
 
+    let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
+    macro_rules! perf_phase {
+        ($name:expr) => {
+            if let Some(ref t) = _t0 {
+                eprintln!("[perf] {:35} {:.1}ms", $name, Instant::now().duration_since(*t).as_secs_f64() * 1000.0);
+            }
+        };
+    }
+
     let domain = &pk.vk.domain;
     let mut meta = ConstraintSystem::default();
     let config = ConcreteCircuit::configure(&mut meta);
@@ -71,7 +81,6 @@ pub fn create_proof<
         pub instance_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
         pub instance_polys: Vec<Polynomial<C::Scalar, Coeff>>,
         pub instance_cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>,
-        pub instance_blinds: Vec<Blind<C::Scalar>>,
     }
 
     let instance: Vec<InstanceSingle<C>> = instances
@@ -91,8 +100,21 @@ pub fn create_proof<
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let instance_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> =
+                instance_values.iter().collect();
             let instance_blinds: Vec<Blind<C::Scalar>> =
                 (0..instance_values.len()).map(|_| Blind::default()).collect();
+            let instance_commitments_projective =
+                params.commit_batch_lagrange(&instance_refs, &instance_blinds);
+            let mut instance_commitments =
+                vec![C::identity(); instance_commitments_projective.len()];
+            C::Curve::batch_normalize(&instance_commitments_projective, &mut instance_commitments);
+            let instance_commitments = instance_commitments;
+            drop(instance_commitments_projective);
+
+            for commitment in &instance_commitments {
+                transcript.common_point(*commitment)?;
+            }
 
             let instance_polys: Vec<_> = instance_values
                 .iter()
@@ -111,10 +133,10 @@ pub fn create_proof<
                 instance_values,
                 instance_polys,
                 instance_cosets,
-                instance_blinds,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("instance");
 
     struct AdviceSingle<C: CurveAffine> {
         pub advice_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
@@ -288,11 +310,22 @@ pub fn create_proof<
                 }
             }
 
-            // Compute blinding factors for advice column polynomials
+            // Compute commitments to advice column polynomials
             let advice_blinds: Vec<_> = advice
                 .iter()
                 .map(|_| Blind(C::Scalar::random(&mut rng)))
                 .collect();
+            let advice_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> = advice.iter().collect();
+            let advice_commitments_projective =
+                params.commit_batch_lagrange(&advice_refs, &advice_blinds);
+            let mut advice_commitments = vec![C::identity(); advice_commitments_projective.len()];
+            C::Curve::batch_normalize(&advice_commitments_projective, &mut advice_commitments);
+            let advice_commitments = advice_commitments;
+            drop(advice_commitments_projective);
+
+            for commitment in &advice_commitments {
+                transcript.write_point(*commitment)?;
+            }
 
             let advice_polys: Vec<_> = advice
                 .clone()
@@ -313,34 +346,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-
-    // Batch-commit instance and advice columns per circuit (Round 0).
-    // Consolidated into a single commit_batch_lagrange call so all
-    // polynomials benefit from Fuji batch-4 MSM.
-    for (instance, advice) in instance.iter().zip(advice.iter()) {
-        let num_instances = instance.instance_values.len();
-        let mut all_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> =
-            Vec::with_capacity(num_instances + advice.advice_values.len());
-        let mut all_blinds = Vec::with_capacity(all_refs.capacity());
-
-        all_refs.extend(instance.instance_values.iter());
-        all_blinds.extend(instance.instance_blinds.iter().copied());
-
-        all_refs.extend(advice.advice_values.iter());
-        all_blinds.extend(advice.advice_blinds.iter().copied());
-
-        let commitments_projective = params.commit_batch_lagrange(&all_refs, &all_blinds);
-        let mut commitments = vec![C::identity(); commitments_projective.len()];
-        C::Curve::batch_normalize(&commitments_projective, &mut commitments);
-
-        // Transcript-write in original order: instances first, then advice
-        for c in commitments.iter().take(num_instances) {
-            transcript.common_point(*c)?;
-        }
-        for c in commitments.iter().skip(num_instances) {
-            transcript.write_point(*c)?;
-        }
-    }
+    perf_phase!("synthesize + advice");
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
@@ -458,6 +464,7 @@ pub fn create_proof<
                 .collect()
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("lookup_permuted");
 
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
@@ -465,7 +472,7 @@ pub fn create_proof<
     // Sample gamma challenge
     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
-    // Commit to permutations (deferred — no MSM yet, just compute polys).
+    // Commit to permutations.
     let permutations: Vec<permutation::prover::Committed<C, _>> = instance
         .iter()
         .zip(advice.iter())
@@ -481,6 +488,7 @@ pub fn create_proof<
                 gamma,
                 &mut coset_evaluator,
                 &mut rng,
+                transcript,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -488,7 +496,7 @@ pub fn create_proof<
     let lookups: Vec<Vec<lookup::prover::Committed<C, _>>> = lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
-            // Construct and commit to products for each lookup (deferred)
+            // Construct and commit to products for each lookup
             lookups
                 .into_iter()
                 .map(|lookup| {
@@ -499,63 +507,19 @@ pub fn create_proof<
                         gamma,
                         &mut coset_evaluator,
                         &mut rng,
+                        transcript,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Commit to the vanishing argument's random polynomial (deferred)
-    let vanishing = vanishing::Argument::commit(domain, &mut rng);
-
-    // Batch-commit Round 2 polys (permutation products + lookup products + vanishing blinding).
-    // In transcript order: permutation products first, then lookup products, then vanishing blinding.
-    {
-        // Batch A: Lagrange-form commitments (permutation products + lookup products)
-        let mut lagrange_refs: Vec<&Polynomial<C::Scalar, LagrangeCoeff>> = Vec::new();
-        let mut lagrange_blinds = Vec::new();
-        // Track how many permuation polys we have (to slice results correctly)
-        let num_perm_polys: usize = permutations.iter().map(|p| p.sets.len()).sum();
-
-        for perm in &permutations {
-            for set in &perm.sets {
-                lagrange_refs.push(&set.permutation_product_values);
-                lagrange_blinds.push(set.permutation_product_blind);
-            }
-        }
-        for lookups in &lookups {
-            for lookup in lookups {
-                lagrange_refs.push(&lookup.product_values);
-                lagrange_blinds.push(lookup.product_blind);
-            }
-        }
-
-        let commits_projective =
-            params.commit_batch_lagrange(&lagrange_refs, &lagrange_blinds);
-        let mut commits = vec![C::identity(); commits_projective.len()];
-        C::Curve::batch_normalize(&commits_projective, &mut commits);
-
-        // Transcript: permutation products
-        for c in commits.iter().take(num_perm_polys) {
-            transcript.write_point(*c)?;
-        }
-        // Transcript: lookup products
-        for c in commits.iter().skip(num_perm_polys) {
-            transcript.write_point(*c)?;
-        }
-    }
-
-    // Batch B: coefficient-form commitment (vanishing blinding poly)
-    {
-        let poly_refs = [&vanishing.random_poly];
-        let blind_refs = [vanishing.random_blind];
-        let commits_projective = params.commit_batch(&poly_refs, &blind_refs);
-        let c = commits_projective[0].to_affine();
-        transcript.write_point(c)?;
-    }
+    // Commit to the vanishing argument's random polynomial for blinding h(x_3)
+    let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
+    perf_phase!("round2_commit");
 
     // Evaluate the h(X) polynomial's constraint system expressions for the permutation constraints.
     let (permutations, permutation_expressions): (Vec<_>, Vec<_>) = permutations
@@ -644,6 +608,7 @@ pub fn create_proof<
         &mut rng,
         transcript,
     )?;
+    perf_phase!("vanishing_construct");
 
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n, 0, 0, 0]);
@@ -771,7 +736,9 @@ pub fn create_proof<
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
-    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)
+    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)?;
+    perf_phase!("create_proof_total");
+    Ok(())
 }
 
 #[test]

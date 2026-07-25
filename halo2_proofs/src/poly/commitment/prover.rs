@@ -54,7 +54,7 @@ pub fn create_proof<
     let s_poly_blind = Blind(C::Scalar::random(&mut rng));
 
     // Write a commitment to the random polynomial to the transcript
-    let s_poly_commitment = params.commit_batch(&[&s_poly], &[s_poly_blind])[0].to_affine();
+    let s_poly_commitment = params.commit(&s_poly, s_poly_blind).to_affine();
     transcript.write_point(s_poly_commitment)?;
 
     // Challenge that will ensure that the prover cannot change P but can only
