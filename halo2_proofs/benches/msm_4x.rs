@@ -11,6 +11,8 @@ use rand_core::OsRng;
 const K_RANGE: std::ops::Range<u32> = 4..18;
 
 const SW_4X: bool = true;
+const SW_3X: bool = true;
+const PRL_SRS_BATCH_3X: bool = true;
 const SW_IDENTG_4X: bool = false;
 const PRL_IDENTG_4X: bool = false;
 const PRL_LOAD: bool = false;
@@ -68,6 +70,15 @@ fn main() {
                 let _r1 = best_multiexp(&coeffs[1], &bases_srs);
                 let _r2 = best_multiexp(&coeffs[2], &bases_srs);
                 let _r3 = best_multiexp(&coeffs[3], &bases_srs);
+            });
+        }
+
+        // 3× SW — sequential best_multiexp calls (for batch-n comparison)
+        if SW_3X {
+            timed("sw-3x", k, || {
+                let _r0 = best_multiexp(&coeffs[0], &bases_srs);
+                let _r1 = best_multiexp(&coeffs[1], &bases_srs);
+                let _r2 = best_multiexp(&coeffs[2], &bases_srs);
             });
         }
 
@@ -282,6 +293,26 @@ fn main() {
                     let _r2 = fuji::msm::prl_pippenger(&scalars_fuji[2], &bases_srs_mont, curve).unwrap();
                     let _r3 = fuji::msm::prl_pippenger(&scalars_fuji[3], &bases_srs_mont, curve).unwrap();
                 });
+            }
+
+            // 3× PRL — batch-n (n_msms=3) with distinct SRS bases + correctness verification
+            if PRL_SRS_BATCH_3X {
+                let flat_scalars: Vec<FujiField> = scalars_fuji[0..3].iter().flat_map(|s| s.iter().copied()).collect();
+                let start = std::time::Instant::now();
+                let r = fuji::msm::prl_pippenger_batch_n(&flat_scalars, &bases_srs_mont, 3, curve).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+
+                let mut all_ok = true;
+                for i in 0..3 {
+                    let sw_pt = best_multiexp(&coeffs[i], &bases_srs);
+                    let sw_aff = sw_pt.to_affine();
+                    let sw_x = sw_aff.coordinates().unwrap().x().to_repr();
+                    let r_aff = r[i].from_mont(curve).to_affine(curve).unwrap();
+                    let ok = r_aff.x().to_bytes() == sw_x.as_ref();
+                    if !ok { all_ok = false; }
+                }
+                println!("prl-srs-batch-3x/k={:<2}: {:>8.3} ms  correct: {}",
+                    k, elapsed * 1000.0, if all_ok { "✓" } else { "✗" });
             }
 
             // 4× PRL — batch-4 with distinct SRS bases + correctness verification
