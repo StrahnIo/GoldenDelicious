@@ -320,7 +320,6 @@ fn main() {
             if PRL_SRS_BATCH_3X_PADDED {
                 let mut padded: Vec<FujiField> = scalars_fuji[0..3].iter().flat_map(|s| s.iter().copied()).collect();
                 padded.extend(std::iter::repeat(fuji::FujiField::zero()).take(n));
-                padded.push(fuji::FujiField::zero()); // blinding for dummy MSM
 
                 let start = std::time::Instant::now();
                 let r = fuji::msm::prl_pippenger_batch_4(&padded, &bases_srs_mont, curve).unwrap();
