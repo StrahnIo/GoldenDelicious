@@ -321,10 +321,12 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_mont;
         let mut results = Vec::with_capacity(polys.len());
+        let _t_chunk = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
             let n_msms = pchunk.len();
+            let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
 
             if std::env::var("FUJI_DEBUG").is_ok() {
                 eprintln!("[fuji] commit_batch_fuji: chunk n_msms={} n={}", n_msms, n);
@@ -341,6 +343,15 @@ impl<C: CurveAffine> Params<C> {
             for pt in outs {
                 results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
             }
+
+            if let Some(t0) = _t0 {
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("[perf]   fuji_chunk(n_msms={},n={}): {:.1}ms", n_msms, n, ms);
+            }
+        }
+        if let Some(t_chunk) = _t_chunk {
+            let ms = t_chunk.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("[perf] commit_batch_fuji(polys={},n={}): {:.1}ms", polys.len(), n, ms);
         }
         results
     }
@@ -361,10 +372,12 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_lagrange_mont;
         let mut results = Vec::with_capacity(polys.len());
+        let _t_chunk = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
             let n_msms = pchunk.len();
+            let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
 
             if std::env::var("FUJI_DEBUG").is_ok() {
                 eprintln!("[fuji] commit_batch_lagrange_fuji: chunk n_msms={} n={}", n_msms, n);
@@ -381,6 +394,15 @@ impl<C: CurveAffine> Params<C> {
             for pt in outs {
                 results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
             }
+
+            if let Some(t0) = _t0 {
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("[perf]   fuji_chunk(n_msms={},n={}): {:.1}ms", n_msms, n, ms);
+            }
+        }
+        if let Some(t_chunk) = _t_chunk {
+            let ms = t_chunk.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("[perf] commit_batch_lagrange_fuji(polys={},n={}): {:.1}ms", polys.len(), n, ms);
         }
         results
     }

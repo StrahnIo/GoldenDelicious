@@ -3,6 +3,7 @@ use group::Curve;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
+use std::time::Instant;
 
 use super::{
     circuit::{
@@ -54,6 +55,17 @@ pub fn create_proof<
         if instance.len() != pk.vk.cs.num_instance_columns {
             return Err(Error::InvalidInstances);
         }
+    }
+
+    let _perf = std::env::var("PERF_DEBUG").is_ok();
+    let _t0 = if _perf { Some(Instant::now()) } else { None };
+    macro_rules! perf_phase {
+        ($name:expr) => {
+            if let Some(ref t) = _t0 {
+                let elapsed = Instant::now().duration_since(*t).as_secs_f64() * 1000.0;
+                eprintln!("[perf] {:30} {:.1}ms", $name, elapsed);
+            }
+        };
     }
 
     // Hash verification key into transcript
@@ -115,6 +127,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("instance_polys");
 
     struct AdviceSingle<C: CurveAffine> {
         pub advice_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
@@ -313,6 +326,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("synthesize + advice");
 
     // Batch-commit instance and advice columns per circuit (Round 0).
     // Consolidated into a single commit_batch_lagrange call so all
@@ -341,6 +355,7 @@ pub fn create_proof<
             transcript.write_point(*c)?;
         }
     }
+    perf_phase!("round0_batch_commit");
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
@@ -422,6 +437,7 @@ pub fn create_proof<
     let l0 = coset_evaluator.register_poly(pk.l0.clone());
     let l_blind = coset_evaluator.register_poly(pk.l_blind.clone());
     let l_last = coset_evaluator.register_poly(pk.l_last.clone());
+    perf_phase!("register_polys");
 
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
@@ -458,6 +474,7 @@ pub fn create_proof<
                 .collect()
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("lookup_permuted");
 
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
@@ -553,6 +570,7 @@ pub fn create_proof<
         let c = commits_projective[0].to_affine();
         transcript.write_point(c)?;
     }
+    perf_phase!("round2_batch_commit");
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
@@ -644,6 +662,7 @@ pub fn create_proof<
         &mut rng,
         transcript,
     )?;
+    perf_phase!("vanishing_construct");
 
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n, 0, 0, 0]);
@@ -771,7 +790,10 @@ pub fn create_proof<
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
-    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)
+    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)?;
+    perf_phase!("multiopen");
+    perf_phase!("create_proof_total");
+    Ok(())
 }
 
 #[test]
