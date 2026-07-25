@@ -5,6 +5,7 @@ use std::{
     ops::{Add, Mul, MulAssign, Neg, Sub},
     sync::Arc,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ff::WithSmallOrderMulGroup;
 use group::ff::Field;
@@ -148,14 +149,23 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             polys: &'a [Polynomial<F, B>],
         }
 
+        #[inline(always)]
+        fn count(counters: &[AtomicU64; 7], idx: usize) {
+            if std::env::var("PERF_DEBUG").is_ok() {
+                counters[idx].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         fn recurse_into<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
             out: &mut [F],
             ast: &Ast<E, F, B>,
             ctx: &AstContext<'_, F, B>,
             stack: &mut [Vec<F>],
+            counters: &[AtomicU64; 7],
         ) {
             match ast {
                 Ast::Poly(leaf) => {
+                    count(counters, 0);
                     B::get_chunk_of_rotated_into(
                         out,
                         ctx.domain,
@@ -166,37 +176,41 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     );
                 }
                 Ast::Add(a, b) => {
-                    recurse_into(out, b, ctx, stack);
+                    count(counters, 1);
+                    recurse_into(out, b, ctx, stack, counters);
                     let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, rest);
+                    recurse_into(&mut first[0], a, ctx, rest, counters);
                     for i in 0..out.len() {
                         out[i] += first[0][i];
                     }
                 }
                 Ast::Mul(AstMul(a, b)) => {
-                    recurse_into(out, b, ctx, stack);
+                    count(counters, 2);
+                    recurse_into(out, b, ctx, stack, counters);
                     let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, rest);
+                    recurse_into(&mut first[0], a, ctx, rest, counters);
                     for i in 0..out.len() {
                         out[i] *= first[0][i];
                     }
                 }
                 Ast::Scale(a, scalar) => {
-                    recurse_into(out, a, ctx, stack);
+                    count(counters, 3);
+                    recurse_into(out, a, ctx, stack, counters);
                     for lhs in out.iter_mut() {
                         *lhs *= scalar;
                     }
                 }
                 Ast::DistributePowers(terms, base) => {
+                    count(counters, 4);
                     let mut terms = terms.iter();
                     if let Some(first_term) = terms.next() {
-                        recurse_into(out, first_term, ctx, stack);
+                        recurse_into(out, first_term, ctx, stack, counters);
                         for term in terms {
                             for elem in out.iter_mut() {
                                 *elem *= base;
                             }
                             let (first, rest) = stack.split_at_mut(1);
-                            recurse_into(&mut first[0], term, ctx, rest);
+                            recurse_into(&mut first[0], term, ctx, rest, counters);
                             for i in 0..out.len() {
                                 out[i] += first[0][i];
                             }
@@ -206,9 +220,11 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     }
                 }
                 Ast::LinearTerm(scalar) => {
+                    count(counters, 5);
                     B::linear_term_into(out, ctx.domain, ctx.chunk_size, ctx.chunk_index, *scalar);
                 }
                 Ast::ConstantTerm(scalar) => {
+                    count(counters, 6);
                     B::constant_term_into(out, *scalar);
                 }
             }
@@ -216,6 +232,12 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 
         // Apply `ast` to each chunk in parallel, writing the result into an output
         // polynomial.
+        let counters: [AtomicU64; 7] = [
+            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+            AtomicU64::new(0),
+        ];
+        let counters_ref = &counters;
         let depth = ast.depth();
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
@@ -231,10 +253,17 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     let mut scratch: Vec<Vec<F>> = (0..depth + 1)
                         .map(|_| vec![F::ZERO; out.len()])
                         .collect();
-                    recurse_into(out, ast, &ctx, &mut scratch[..]);
+                    recurse_into(out, ast, &ctx, &mut scratch[..], counters_ref);
                 });
             }
         });
+        if std::env::var("PERF_DEBUG").is_ok() {
+            let c = |i: usize| counters[i].load(Ordering::Relaxed);
+            eprintln!(
+                "[perf] AST: Poly={} Add={} Mul={} Scale={} DP={} Lin={} Const={}",
+                c(0), c(1), c(2), c(3), c(4), c(5), c(6)
+            );
+        }
         result
     }
 }
