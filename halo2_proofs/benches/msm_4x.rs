@@ -13,6 +13,7 @@ const K_RANGE: std::ops::Range<u32> = 4..18;
 const SW_4X: bool = true;
 const SW_3X: bool = true;
 const PRL_SRS_BATCH_3X: bool = true;
+const PRL_SRS_BATCH_3X_PADDED: bool = true;
 const SW_IDENTG_4X: bool = false;
 const PRL_IDENTG_4X: bool = false;
 const PRL_LOAD: bool = false;
@@ -313,6 +314,30 @@ fn main() {
                 }
                 println!("prl-srs-batch-3x/k={:<2}: {:>8.3} ms  correct: {}",
                     k, elapsed * 1000.0, if all_ok { "✓" } else { "✗" });
+            }
+
+            // 3× PRL — batch_4 with zero-scalar padding (compares vs batch_n native)
+            if PRL_SRS_BATCH_3X_PADDED {
+                let mut padded: Vec<FujiField> = scalars_fuji[0..3].iter().flat_map(|s| s.iter().copied()).collect();
+                padded.extend(std::iter::repeat(fuji::FujiField::zero()).take(n));
+                padded.push(fuji::FujiField::zero()); // blinding for dummy MSM
+
+                let start = std::time::Instant::now();
+                let r = fuji::msm::prl_pippenger_batch_4(&padded, &bases_srs_mont, curve).unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+
+                let mut all_ok = true;
+                for i in 0..3 {
+                    let sw_pt = best_multiexp(&coeffs[i], &bases_srs);
+                    let sw_aff = sw_pt.to_affine();
+                    let sw_x = sw_aff.coordinates().unwrap().x().to_repr();
+                    let r_aff = r[i].from_mont(curve).to_affine(curve).unwrap();
+                    let ok = r_aff.x().to_bytes() == sw_x.as_ref();
+                    if !ok { all_ok = false; }
+                }
+                let id_ok = r[3].from_mont(curve).to_affine(curve).unwrap().x().to_bytes() == [0u8; 32];
+                println!("prl-srs-batch-3x-padded/k={:<2}: {:>8.3} ms  correct: {} (4th=id:{})",
+                    k, elapsed * 1000.0, if all_ok { "✓" } else { "✗" }, if id_ok { "✓" } else { "✗" });
             }
 
             // 4× PRL — batch-4 with distinct SRS bases + correctness verification
