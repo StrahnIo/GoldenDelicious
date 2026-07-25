@@ -177,20 +177,18 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                 }
                 Ast::Add(a, b) => {
                     count(counters, 1);
+                    recurse_into(out, b, ctx, counters, stack);
                     let (first, rest) = stack.split_at_mut(1);
                     recurse_into(&mut first[0], a, ctx, counters, rest);
-                    out.copy_from_slice(&first[0][..out.len()]);
-                    recurse_into(&mut first[0], b, ctx, counters, rest);
                     for i in 0..out.len() {
                         out[i] += first[0][i];
                     }
                 }
                 Ast::Mul(AstMul(a, b)) => {
                     count(counters, 2);
+                    recurse_into(out, b, ctx, counters, stack);
                     let (first, rest) = stack.split_at_mut(1);
                     recurse_into(&mut first[0], a, ctx, counters, rest);
-                    out.copy_from_slice(&first[0][..out.len()]);
-                    recurse_into(&mut first[0], b, ctx, counters, rest);
                     for i in 0..out.len() {
                         out[i] *= first[0][i];
                     }
