@@ -215,17 +215,8 @@ impl<C: CurveAffine> Params<C> {
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
-                #[cfg(feature = "fuji")]
-                if std::env::var("FUJI_DEBUG").is_ok() {
-                    eprintln!("[fuji] commit_batch: n={} polys={} k={}", self.n, polys.len(), self.k);
-                }
                 return self.commit_batch_fuji(polys, r);
             }
-        }
-
-        #[cfg(feature = "fuji")]
-        if std::env::var("FUJI_DEBUG").is_ok() {
-            eprintln!("[fuji] commit_batch: FUJI SKIP n={} polys={} k={}", self.n, polys.len(), self.k);
         }
 
         polys
@@ -279,17 +270,8 @@ impl<C: CurveAffine> Params<C> {
         if self.n >= 64 {
             use crate::arithmetic::fuji;
             if fuji::fuji_available() {
-                #[cfg(feature = "fuji")]
-                if std::env::var("FUJI_DEBUG").is_ok() {
-                    eprintln!("[fuji] commit_batch_lagrange: n={} polys={} k={}", self.n, polys.len(), self.k);
-                }
                 return self.commit_batch_lagrange_fuji(polys, r);
             }
-        }
-
-        #[cfg(feature = "fuji")]
-        if std::env::var("FUJI_DEBUG").is_ok() {
-            eprintln!("[fuji] commit_batch_lagrange: FUJI SKIP n={} polys={} k={}", self.n, polys.len(), self.k);
         }
 
         polys
@@ -305,8 +287,10 @@ impl<C: CurveAffine> Params<C> {
         MSM::new(self)
     }
 
-    /// Batch-n Fuji MSM for coefficient polynomial batches.
-    /// Uses prl_pippenger_batch_n which handles n=1..4 efficiently.
+    /// Batch-4 Fuji MSM: groups N polynomials into chunks of 4, pads any
+    /// partial chunk with zero scalars, and dispatches to
+    /// prl_pippenger_batch_4. Near-zero overhead because Pippenger skips
+    /// zero-bucket entries, producing identity points for the padded slots.
     #[cfg(feature = "fuji")]
     fn commit_batch_fuji(
         &self,
@@ -321,43 +305,34 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_mont;
         let mut results = Vec::with_capacity(polys.len());
-        let _t_chunk = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+        let zero_fuji = fuji::FujiField::zero();
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
-            let n_msms = pchunk.len();
-            let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+            let actual = pchunk.len();
+            let total = 4usize;
 
-            if std::env::var("FUJI_DEBUG").is_ok() {
-                eprintln!("[fuji] commit_batch_fuji: chunk n_msms={} n={}", n_msms, n);
-            }
-
-            let mut flat = Vec::with_capacity(n_msms * (n + 1));
+            let mut flat = Vec::with_capacity(total * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
                 flat.extend(poly.iter().map(field_to_fuji));
                 flat.push(field_to_fuji(&blind.0));
             }
+            for _ in actual..total {
+                flat.extend(std::iter::repeat(zero_fuji).take(n));
+                flat.push(zero_fuji);
+            }
 
             let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
-            let outs = ::fuji::msm::prl_pippenger_batch_n(&flat, &bases, n_msms, self.fuji_curve).unwrap();
-            for pt in outs {
-                results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
+            let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, self.fuji_curve).unwrap();
+            for pt in outs.iter().take(actual) {
+                results.push(fuji_point_to_curve::<C>(*pt, self.fuji_curve));
             }
-
-            if let Some(t0) = _t0 {
-                let ms = t0.elapsed().as_secs_f64() * 1000.0;
-                eprintln!("[perf]   fuji_chunk(n_msms={},n={}): {:.1}ms", n_msms, n, ms);
-            }
-        }
-        if let Some(t_chunk) = _t_chunk {
-            let ms = t_chunk.elapsed().as_secs_f64() * 1000.0;
-            eprintln!("[perf] commit_batch_fuji(polys={},n={}): {:.1}ms", polys.len(), n, ms);
         }
         results
     }
 
-    /// Batch-n Fuji MSM for Lagrange coefficient polynomials.
-    /// Uses prl_pippenger_batch_n which handles n=1..4 efficiently.
+    /// Batch-4 Fuji MSM for Lagrange coefficient polynomials. Pads partial
+    /// chunks to 4 with zero scalars, same as `commit_batch_fuji`.
     #[cfg(feature = "fuji")]
     fn commit_batch_lagrange_fuji(
         &self,
@@ -372,37 +347,28 @@ impl<C: CurveAffine> Params<C> {
         let n = self.n as usize;
         let g_mont = &self.g_lagrange_mont;
         let mut results = Vec::with_capacity(polys.len());
-        let _t_chunk = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+        let zero_fuji = fuji::FujiField::zero();
 
         for chunk in polys.chunks(4).zip(r.chunks(4)) {
             let (pchunk, rchunk) = chunk;
-            let n_msms = pchunk.len();
-            let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+            let actual = pchunk.len();
+            let total = 4usize;
 
-            if std::env::var("FUJI_DEBUG").is_ok() {
-                eprintln!("[fuji] commit_batch_lagrange_fuji: chunk n_msms={} n={}", n_msms, n);
-            }
-
-            let mut flat = Vec::with_capacity(n_msms * (n + 1));
+            let mut flat = Vec::with_capacity(total * (n + 1));
             for (poly, blind) in pchunk.iter().zip(rchunk.iter()) {
                 flat.extend(poly.iter().map(field_to_fuji));
                 flat.push(field_to_fuji(&blind.0));
             }
+            for _ in actual..total {
+                flat.extend(std::iter::repeat(zero_fuji).take(n));
+                flat.push(zero_fuji);
+            }
 
             let bases: Vec<_> = g_mont.iter().copied().chain(std::iter::once(self.w_mont)).collect();
-            let outs = ::fuji::msm::prl_pippenger_batch_n(&flat, &bases, n_msms, self.fuji_curve).unwrap();
-            for pt in outs {
-                results.push(fuji_point_to_curve::<C>(pt, self.fuji_curve));
+            let outs = ::fuji::msm::prl_pippenger_batch_4(&flat, &bases, self.fuji_curve).unwrap();
+            for pt in outs.iter().take(actual) {
+                results.push(fuji_point_to_curve::<C>(*pt, self.fuji_curve));
             }
-
-            if let Some(t0) = _t0 {
-                let ms = t0.elapsed().as_secs_f64() * 1000.0;
-                eprintln!("[perf]   fuji_chunk(n_msms={},n={}): {:.1}ms", n_msms, n, ms);
-            }
-        }
-        if let Some(t_chunk) = _t_chunk {
-            let ms = t_chunk.elapsed().as_secs_f64() * 1000.0;
-            eprintln!("[perf] commit_batch_lagrange_fuji(polys={},n={}): {:.1}ms", polys.len(), n, ms);
         }
         results
     }

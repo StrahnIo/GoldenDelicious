@@ -156,103 +156,87 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             }
         }
 
-        fn recurse_into<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
-            out: &mut [F],
+        fn recurse<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
             ast: &Ast<E, F, B>,
             ctx: &AstContext<'_, F, B>,
             counters: &[AtomicU64; 7],
-            stack: &mut [Vec<F>],
-        ) {
+        ) -> Vec<F> {
             match ast {
                 Ast::Poly(leaf) => {
                     count(counters, 0);
-                    out.copy_from_slice(&B::get_chunk_of_rotated(
+                    B::get_chunk_of_rotated(
                         ctx.domain,
                         ctx.chunk_size,
                         ctx.chunk_index,
                         &ctx.polys[leaf.index],
                         leaf.rotation,
-                    ));
+                    )
                 }
                 Ast::Add(a, b) => {
                     count(counters, 1);
-                    let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, counters, rest);
-                    out.copy_from_slice(&first[0]);
-                    let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], b, ctx, counters, rest);
-                    for i in 0..out.len() {
-                        out[i] += first[0][i];
+                    let mut lhs = recurse(a, ctx, counters);
+                    let rhs = recurse(b, ctx, counters);
+                    for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
+                        *lhs += *rhs;
                     }
+                    lhs
                 }
                 Ast::Mul(AstMul(a, b)) => {
                     count(counters, 2);
-                    let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, counters, rest);
-                    out.copy_from_slice(&first[0]);
-                    let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], b, ctx, counters, rest);
-                    for i in 0..out.len() {
-                        out[i] *= first[0][i];
+                    let mut lhs = recurse(a, ctx, counters);
+                    let rhs = recurse(b, ctx, counters);
+                    for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
+                        *lhs *= *rhs;
                     }
+                    lhs
                 }
                 Ast::Scale(a, scalar) => {
                     count(counters, 3);
-                    recurse_into(out, a, ctx, counters, stack);
-                    for lhs in out.iter_mut() {
+                    let mut lhs = recurse(a, ctx, counters);
+                    for lhs in lhs.iter_mut() {
                         *lhs *= scalar;
                     }
+                    lhs
                 }
                 Ast::DistributePowers(terms, base) => {
                     count(counters, 4);
-                    let mut terms = terms.iter().rev();
-                    if let Some(first_term) = terms.next() {
-                        recurse_into(out, first_term, ctx, counters, stack);
-                        for term in terms {
-                            for elem in out.iter_mut() {
-                                *elem *= base;
+                    terms.iter().fold(
+                        B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, F::ZERO),
+                        |mut acc, term| {
+                            let term = recurse(term, ctx, counters);
+                            for (acc, term) in acc.iter_mut().zip(term) {
+                                *acc *= base;
+                                *acc += term;
                             }
-                            let (first, rest) = stack.split_at_mut(1);
-                            recurse_into(&mut first[0], term, ctx, counters, rest);
-                            for (o, h) in out.iter_mut().zip(first[0].iter()) {
-                                *o += *h;
-                            }
-                        }
-                    } else {
-                        out.fill(F::ZERO);
-                    }
+                            acc
+                        },
+                    )
                 }
                 Ast::LinearTerm(scalar) => {
                     count(counters, 5);
-                    out.copy_from_slice(&B::linear_term(
+                    B::linear_term(
                         ctx.domain,
                         ctx.poly_len,
                         ctx.chunk_size,
                         ctx.chunk_index,
                         *scalar,
-                    ));
+                    )
                 }
                 Ast::ConstantTerm(scalar) => {
                     count(counters, 6);
-                    out.copy_from_slice(&B::constant_term(
-                        ctx.poly_len,
-                        ctx.chunk_size,
-                        ctx.chunk_index,
-                        *scalar,
-                    ));
+                    B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, *scalar)
                 }
             }
         }
 
         // Apply `ast` to each chunk in parallel, writing the result into an output
-        // polynomial. Pre-allocate scratch buffers equal to AST recursion depth.
+        // polynomial.
         let counters: [AtomicU64; 7] = [
             AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
             AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
             AtomicU64::new(0),
         ];
         let counters_ref = &counters;
-        let depth = ast.depth();
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
             for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
@@ -264,10 +248,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                         chunk_index,
                         polys: &self.polys,
                     };
-                    let mut scratch: Vec<Vec<F>> = (0..depth)
-                        .map(|_| vec![F::ZERO; chunk_size])
-                        .collect();
-                    recurse_into(out, ast, &ctx, counters_ref, &mut scratch[..]);
+                    out.copy_from_slice(&recurse(ast, &ctx, counters_ref));
                 });
             }
         });
@@ -326,18 +307,6 @@ pub(crate) enum Ast<E, F: Field, B: Basis> {
 impl<E, F: Field, B: Basis> Ast<E, F, B> {
     pub fn distribute_powers<I: IntoIterator<Item = Self>>(i: I, base: F) -> Self {
         Ast::DistributePowers(Arc::new(i.into_iter().collect()), base)
-    }
-
-    /// Maximum recursion depth of this AST. Used to size the scratch buffer stack.
-    pub(crate) fn depth(&self) -> usize {
-        match self {
-            Ast::Poly(_) | Ast::LinearTerm(_) | Ast::ConstantTerm(_) => 0,
-            Ast::Scale(a, _) => a.depth(),
-            Ast::Add(a, b) | Ast::Mul(AstMul(a, b)) => 1 + a.depth().max(b.depth()),
-            Ast::DistributePowers(terms, _) => {
-                terms.iter().map(|t| t.depth()).max().unwrap_or(0)
-            }
-        }
     }
 }
 

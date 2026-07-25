@@ -16,7 +16,6 @@ use rand_core::RngCore;
 use std::hash::Hash;
 use std::io;
 use std::marker::PhantomData;
-use std::time::Instant;
 
 /// Create a multi-opening proof
 pub fn create_proof<
@@ -94,15 +93,11 @@ where
         })
         .unwrap();
 
-    let _tq = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     let q_prime_blind = Blind(C::Scalar::random(&mut rng));
     let q_prime_commitment =
         params.commit_batch(&[&q_prime_poly], &[q_prime_blind])[0].to_affine();
 
     transcript.write_point(q_prime_commitment)?;
-    if let Some(tq) = _tq {
-        eprintln!("[perf]   q_prime_commit: {:.1}ms", tq.elapsed().as_secs_f64() * 1000.0);
-    }
 
     let x_3: ChallengeX3<_> = transcript.squeeze_challenge_scalar();
 
@@ -124,12 +119,7 @@ where
         },
     );
 
-    let _tipa = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
-    let result = commitment::create_proof(params, rng, transcript, &p_poly, p_poly_blind, *x_3);
-    if let Some(tipa) = _tipa {
-        eprintln!("[perf]   s_poly_commit + IPA: {:.1}ms", tipa.elapsed().as_secs_f64() * 1000.0);
-    }
-    result
+    commitment::create_proof(params, rng, transcript, &p_poly, p_poly_blind, *x_3)
 }
 
 #[doc(hidden)]
