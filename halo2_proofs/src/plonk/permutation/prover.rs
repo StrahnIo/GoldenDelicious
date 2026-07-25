@@ -20,14 +20,13 @@ use crate::{
 };
 
 pub struct CommittedSet<C: CurveAffine, Ev> {
-    pub(in crate::plonk) permutation_product_poly: Polynomial<C::Scalar, Coeff>,
-    pub(in crate::plonk) permutation_product_values: Polynomial<C::Scalar, LagrangeCoeff>,
-    pub(in crate::plonk) permutation_product_coset: poly::AstLeaf<Ev, ExtendedLagrangeCoeff>,
-    pub(in crate::plonk) permutation_product_blind: Blind<C::Scalar>,
+    permutation_product_poly: Polynomial<C::Scalar, Coeff>,
+    permutation_product_coset: poly::AstLeaf<Ev, ExtendedLagrangeCoeff>,
+    permutation_product_blind: Blind<C::Scalar>,
 }
 
 pub(crate) struct Committed<C: CurveAffine, Ev> {
-    pub(in crate::plonk) sets: Vec<CommittedSet<C, Ev>>,
+    sets: Vec<CommittedSet<C, Ev>>,
 }
 
 pub struct ConstructedSet<C: CurveAffine> {
@@ -47,8 +46,10 @@ impl Argument {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::plonk) fn commit<
         C: CurveAffine,
+        E: EncodedChallenge<C>,
         Ev: Copy + Send + Sync,
         R: RngCore,
+        T: TranscriptWrite<C, E>,
     >(
         &self,
         params: &Params<C>,
@@ -61,6 +62,7 @@ impl Argument {
         gamma: ChallengeGamma<C>,
         evaluator: &mut poly::Evaluator<Ev, C::Scalar, ExtendedLagrangeCoeff>,
         mut rng: R,
+        transcript: &mut T,
     ) -> Result<Committed<C, Ev>, Error> {
         let domain = &pk.vk.domain;
 
@@ -166,17 +168,23 @@ impl Argument {
             last_z = z[params.n as usize - (blinding_factors + 1)];
 
             let blind = Blind(C::Scalar::random(&mut rng));
+
+            let permutation_product_commitment_projective = params.commit_lagrange(&z, blind);
             let permutation_product_blind = blind;
-            let permutation_product_values = z.clone(); // save Lagrange form
             let z = domain.lagrange_to_coeff(z);
             let permutation_product_poly = z.clone();
 
             let permutation_product_coset =
                 evaluator.register_poly(domain.coeff_to_extended(z.clone()));
 
+            let permutation_product_commitment =
+                permutation_product_commitment_projective.to_affine();
+
+            // Hash the permutation product commitment
+            transcript.write_point(permutation_product_commitment)?;
+
             sets.push(CommittedSet {
                 permutation_product_poly,
-                permutation_product_values,
                 permutation_product_coset,
                 permutation_product_blind,
             });

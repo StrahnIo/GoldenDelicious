@@ -43,11 +43,10 @@ pub(in crate::plonk) struct Permuted<C: CurveAffine, Ev> {
 
 #[derive(Debug)]
 pub(in crate::plonk) struct Committed<C: CurveAffine, Ev> {
-    pub(in crate::plonk) permuted: Permuted<C, Ev>,
-    pub(in crate::plonk) product_poly: Polynomial<C::Scalar, Coeff>,
-    pub(in crate::plonk) product_values: Polynomial<C::Scalar, LagrangeCoeff>,
-    pub(in crate::plonk) product_coset: poly::AstLeaf<Ev, ExtendedLagrangeCoeff>,
-    pub(in crate::plonk) product_blind: Blind<C::Scalar>,
+    permuted: Permuted<C, Ev>,
+    product_poly: Polynomial<C::Scalar, Coeff>,
+    product_coset: poly::AstLeaf<Ev, ExtendedLagrangeCoeff>,
+    product_blind: Blind<C::Scalar>,
 }
 
 pub(in crate::plonk) struct Constructed<C: CurveAffine> {
@@ -255,7 +254,9 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
     /// added to the Lookup and finally returned by the method.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::plonk) fn commit_product<
+        E: EncodedChallenge<C>,
         R: RngCore,
+        T: TranscriptWrite<C, E>,
     >(
         self,
         pk: &ProvingKey<C>,
@@ -264,6 +265,7 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         gamma: ChallengeGamma<C>,
         evaluator: &mut poly::Evaluator<Ev, C::Scalar, ExtendedLagrangeCoeff>,
         mut rng: R,
+        transcript: &mut T,
     ) -> Result<Committed<C, Ev>, Error> {
         let blinding_factors = pk.vk.cs.blinding_factors();
         // Goal is to compute the products of fractions
@@ -377,14 +379,16 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         }
 
         let product_blind = Blind(C::Scalar::random(rng));
-        let product_values = z.clone(); // save Lagrange form
+        let product_commitment = params.commit_lagrange(&z, product_blind).to_affine();
         let z = pk.vk.domain.lagrange_to_coeff(z);
         let product_coset = evaluator.register_poly(pk.vk.domain.coeff_to_extended(z.clone()));
+
+        // Hash product commitment
+        transcript.write_point(product_commitment)?;
 
         Ok(Committed::<C, _> {
             permuted: self,
             product_poly: z,
-            product_values,
             product_coset,
             product_blind,
         })

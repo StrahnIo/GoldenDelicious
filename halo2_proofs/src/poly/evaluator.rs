@@ -5,7 +5,6 @@ use std::{
     ops::{Add, Mul, MulAssign, Neg, Sub},
     sync::Arc,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use ff::WithSmallOrderMulGroup;
 use group::ff::Field;
@@ -149,81 +148,60 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             polys: &'a [Polynomial<F, B>],
         }
 
-        #[inline(always)]
-        fn count(counters: &[AtomicU64; 7], idx: usize) {
-            if std::env::var("PERF_DEBUG").is_ok() {
-                counters[idx].fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
         fn recurse<E, F: WithSmallOrderMulGroup<3>, B: BasisOps>(
             ast: &Ast<E, F, B>,
             ctx: &AstContext<'_, F, B>,
-            counters: &[AtomicU64; 7],
         ) -> Vec<F> {
             match ast {
-                Ast::Poly(leaf) => {
-                    count(counters, 0);
-                    B::get_chunk_of_rotated(
-                        ctx.domain,
-                        ctx.chunk_size,
-                        ctx.chunk_index,
-                        &ctx.polys[leaf.index],
-                        leaf.rotation,
-                    )
-                }
+                Ast::Poly(leaf) => B::get_chunk_of_rotated(
+                    ctx.domain,
+                    ctx.chunk_size,
+                    ctx.chunk_index,
+                    &ctx.polys[leaf.index],
+                    leaf.rotation,
+                ),
                 Ast::Add(a, b) => {
-                    count(counters, 1);
-                    let mut lhs = recurse(a, ctx, counters);
-                    let rhs = recurse(b, ctx, counters);
+                    let mut lhs = recurse(a, ctx);
+                    let rhs = recurse(b, ctx);
                     for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
                         *lhs += *rhs;
                     }
                     lhs
                 }
                 Ast::Mul(AstMul(a, b)) => {
-                    count(counters, 2);
-                    let mut lhs = recurse(a, ctx, counters);
-                    let rhs = recurse(b, ctx, counters);
+                    let mut lhs = recurse(a, ctx);
+                    let rhs = recurse(b, ctx);
                     for (lhs, rhs) in lhs.iter_mut().zip(rhs.iter()) {
                         *lhs *= *rhs;
                     }
                     lhs
                 }
                 Ast::Scale(a, scalar) => {
-                    count(counters, 3);
-                    let mut lhs = recurse(a, ctx, counters);
+                    let mut lhs = recurse(a, ctx);
                     for lhs in lhs.iter_mut() {
                         *lhs *= scalar;
                     }
                     lhs
                 }
-                Ast::DistributePowers(terms, base) => {
-                    count(counters, 4);
-                    terms.iter().fold(
-                        B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, F::ZERO),
-                        |mut acc, term| {
-                            let term = recurse(term, ctx, counters);
-                            for (acc, term) in acc.iter_mut().zip(term) {
-                                *acc *= base;
-                                *acc += term;
-                            }
-                            acc
-                        },
-                    )
-                }
-                Ast::LinearTerm(scalar) => {
-                    count(counters, 5);
-                    B::linear_term(
-                        ctx.domain,
-                        ctx.poly_len,
-                        ctx.chunk_size,
-                        ctx.chunk_index,
-                        *scalar,
-                    )
-                }
+                Ast::DistributePowers(terms, base) => terms.iter().fold(
+                    B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, F::ZERO),
+                    |mut acc, term| {
+                        let term = recurse(term, ctx);
+                        for (acc, term) in acc.iter_mut().zip(term) {
+                            *acc *= base;
+                            *acc += term;
+                        }
+                        acc
+                    },
+                ),
+                Ast::LinearTerm(scalar) => B::linear_term(
+                    ctx.domain,
+                    ctx.poly_len,
+                    ctx.chunk_size,
+                    ctx.chunk_index,
+                    *scalar,
+                ),
                 Ast::ConstantTerm(scalar) => {
-                    count(counters, 6);
                     B::constant_term(ctx.poly_len, ctx.chunk_size, ctx.chunk_index, *scalar)
                 }
             }
@@ -231,12 +209,6 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 
         // Apply `ast` to each chunk in parallel, writing the result into an output
         // polynomial.
-        let counters: [AtomicU64; 7] = [
-            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-            AtomicU64::new(0),
-        ];
-        let counters_ref = &counters;
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
             for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
@@ -248,19 +220,10 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                         chunk_index,
                         polys: &self.polys,
                     };
-                    out.copy_from_slice(&recurse(ast, &ctx, counters_ref));
+                    out.copy_from_slice(&recurse(ast, &ctx));
                 });
             }
         });
-        if std::env::var("PERF_DEBUG").is_ok() {
-            let c = |i: usize| counters[i].load(Ordering::Relaxed) as usize;
-            let nchunks = (poly_len + chunk_size - 1) / chunk_size;
-            eprintln!(
-                "[perf] evaluator AST per chunk: Poly={} Add={} Mul={} Scale={} DP={} Lin={} Const={}  ({} chunks × chunk_size={})",
-                c(0)/nchunks, c(1)/nchunks, c(2)/nchunks, c(3)/nchunks, c(4)/nchunks, c(5)/nchunks, c(6)/nchunks,
-                nchunks, chunk_size,
-            );
-        }
         result
     }
 }
