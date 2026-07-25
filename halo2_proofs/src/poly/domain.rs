@@ -294,6 +294,24 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         poly.get_chunk_of_rotated_helper(rotation.0 < 0, new_rotation, chunk_size, chunk_index)
     }
 
+    pub(crate) fn get_chunk_of_rotated_extended_into(
+        &self,
+        out: &mut [F],
+        poly: &Polynomial<F, ExtendedLagrangeCoeff>,
+        rotation: Rotation,
+        chunk_size: usize,
+        chunk_index: usize,
+    ) {
+        let new_rotation = ((1 << (self.extended_k - self.k)) * rotation.0.abs()) as usize;
+        poly.get_chunk_of_rotated_helper_into(
+            out,
+            rotation.0 < 0,
+            new_rotation,
+            chunk_size,
+            chunk_index,
+        );
+    }
+
     /// This takes us from the extended evaluation domain and gets us the
     /// quotient polynomial coefficients.
     ///

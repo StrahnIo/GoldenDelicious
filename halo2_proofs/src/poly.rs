@@ -283,6 +283,40 @@ impl<F: Clone + Copy, B> Polynomial<F, B> {
             chunk
         }
     }
+
+    /// Write the result of `get_chunk_of_rotated` directly into `out`, avoiding a Vec allocation.
+    pub(crate) fn get_chunk_of_rotated_helper_into(
+        &self,
+        out: &mut [F],
+        rotation_is_negative: bool,
+        rotation_abs: usize,
+        chunk_size: usize,
+        chunk_index: usize,
+    ) {
+        let (mid, k) = if rotation_is_negative {
+            let k = rotation_abs;
+            assert!(k <= self.len());
+            let mid = self.len() - k;
+            (mid, k)
+        } else {
+            let mid = rotation_abs;
+            assert!(mid <= self.len());
+            let k = self.len() - mid;
+            (mid, k)
+        };
+        let n_out = out.len();
+        let chunk_start = chunk_size * chunk_index;
+        let chunk_end = chunk_start + n_out;
+        if chunk_end <= k {
+            out.copy_from_slice(&self.values[mid + chunk_start..mid + chunk_end]);
+        } else if chunk_start >= k {
+            out.copy_from_slice(&self.values[chunk_start - k..chunk_end - k]);
+        } else {
+            let first_half = k - chunk_start;
+            out[..first_half].copy_from_slice(&self.values[mid + chunk_start..]);
+            out[first_half..n_out].copy_from_slice(&self.values[..chunk_end - k]);
+        }
+    }
 }
 
 impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
