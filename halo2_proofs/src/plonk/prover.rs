@@ -3,6 +3,7 @@ use group::Curve;
 use rand_core::RngCore;
 use std::iter;
 use std::ops::RangeTo;
+use std::time::Instant;
 
 use super::{
     circuit::{
@@ -58,6 +59,15 @@ pub fn create_proof<
 
     // Hash verification key into transcript
     pk.vk.hash_into(transcript)?;
+
+    let _t0 = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
+    macro_rules! perf_phase {
+        ($name:expr) => {
+            if let Some(ref t) = _t0 {
+                eprintln!("[perf] {:35} {:.1}ms", $name, Instant::now().duration_since(*t).as_secs_f64() * 1000.0);
+            }
+        };
+    }
 
     let domain = &pk.vk.domain;
     let mut meta = ConstraintSystem::default();
@@ -126,6 +136,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("instance");
 
     struct AdviceSingle<C: CurveAffine> {
         pub advice_values: Vec<Polynomial<C::Scalar, LagrangeCoeff>>,
@@ -134,6 +145,7 @@ pub fn create_proof<
         pub advice_blinds: Vec<Blind<C::Scalar>>,
     }
 
+    let _t_synth_start = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     let advice: Vec<AdviceSingle<C>> = circuits
         .iter()
         .zip(instances.iter())
@@ -283,14 +295,18 @@ pub fn create_proof<
             };
 
             // Synthesize the circuit to obtain the witness and other information.
+            let _t_synth = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
             ConcreteCircuit::FloorPlanner::synthesize(
                 &mut witness,
                 circuit,
                 config.clone(),
                 meta.constants.clone(),
             )?;
+            if let Some(ref ts) = _t_synth { eprintln!("[perf]   circuit_synthesis: {:.1}ms", ts.elapsed().as_secs_f64() * 1000.0); }
 
-            let mut advice = batch_invert_assigned(witness.advice);
+            let _t_inv = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
+                    let mut advice = batch_invert_assigned(witness.advice);
+            if let Some(ref ti) = _t_inv { eprintln!("[perf]   batch_invert: {:.1}ms", ti.elapsed().as_secs_f64() * 1000.0); }
 
             // Add blinding factors to advice columns
             for advice in &mut advice {
@@ -316,6 +332,7 @@ pub fn create_proof<
                 transcript.write_point(*commitment)?;
             }
 
+            let _t_fft = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
             let advice_polys: Vec<_> = advice
                 .clone()
                 .into_iter()
@@ -326,6 +343,7 @@ pub fn create_proof<
                 .iter()
                 .map(|poly| domain.coeff_to_extended(poly.clone()))
                 .collect();
+            if let Some(ref tf) = _t_fft { eprintln!("[perf]   advice_ffts: {:.1}ms", tf.elapsed().as_secs_f64() * 1000.0); }
 
             Ok(AdviceSingle {
                 advice_values: advice,
@@ -335,6 +353,7 @@ pub fn create_proof<
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("synthesize + advice");
 
     // Create polynomial evaluator context for values.
     let mut value_evaluator = poly::new_evaluator(|| {});
@@ -420,6 +439,7 @@ pub fn create_proof<
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
 
+    let _t_lk = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     let lookups: Vec<Vec<lookup::prover::Permuted<C, _>>> = instance_values
         .iter()
         .zip(instance_cosets.iter())
@@ -452,6 +472,8 @@ pub fn create_proof<
                 .collect()
         })
         .collect::<Result<Vec<_>, _>>()?;
+    perf_phase!("lookup_permuted");
+    if let Some(ref tl) = _t_lk { eprintln!("[perf]   lookup_permuted_exclusive: {:.1}ms", tl.elapsed().as_secs_f64() * 1000.0); }
 
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
@@ -459,6 +481,7 @@ pub fn create_proof<
     // Sample gamma challenge
     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
+    let _t_perm = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     // Commit to permutations.
     let permutations: Vec<permutation::prover::Committed<C, _>> = instance
         .iter()
@@ -479,7 +502,9 @@ pub fn create_proof<
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(ref tp) = _t_perm { eprintln!("[perf]   permutation_commit: {:.1}ms", tp.elapsed().as_secs_f64() * 1000.0); }
 
+    let _t_lkprod = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     let lookups: Vec<Vec<lookup::prover::Committed<C, _>>> = lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
@@ -500,9 +525,13 @@ pub fn create_proof<
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if let Some(ref tl) = _t_lkprod { eprintln!("[perf]   lookup_product_commit: {:.1}ms", tl.elapsed().as_secs_f64() * 1000.0); }
 
+    let _t_vanish = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     // Commit to the vanishing argument's random polynomial for blinding h(x_3)
     let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
+    perf_phase!("round2_commit");
+    if let Some(ref tv) = _t_vanish { eprintln!("[perf]   vanishing_random_poly: {:.1}ms", tv.elapsed().as_secs_f64() * 1000.0); }
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
@@ -540,6 +569,7 @@ pub fn create_proof<
         })
         .unzip();
 
+    let _t_expr = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
     let expressions = advice_cosets
         .iter()
         .zip(instance_cosets.iter())
@@ -594,6 +624,8 @@ pub fn create_proof<
         &mut rng,
         transcript,
     )?;
+    perf_phase!("vanishing_construct");
+    if let Some(ref te) = _t_expr { eprintln!("[perf]   gate_expr_to_ast + construct: {:.1}ms", te.elapsed().as_secs_f64() * 1000.0); }
 
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n, 0, 0, 0]);
@@ -721,7 +753,11 @@ pub fn create_proof<
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
-    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)
+    let _t_open = if std::env::var("PERF_DEBUG").is_ok() { Some(Instant::now()) } else { None };
+    multiopen::create_proof(params, rng, transcript, instances).map_err(|_| Error::Opening)?;
+    perf_phase!("create_proof_total");
+    if let Some(ref to) = _t_open { eprintln!("[perf]   multiopen: {:.1}ms", to.elapsed().as_secs_f64() * 1000.0); }
+    Ok(())
 }
 
 #[test]

@@ -225,10 +225,12 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     /// This function will panic if the provided vector is not the correct
     /// length.
     pub fn lagrange_to_coeff(&self, mut a: Polynomial<F, LagrangeCoeff>) -> Polynomial<F, Coeff> {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         assert_eq!(a.values.len(), 1 << self.k);
 
         // Perform inverse FFT to obtain the polynomial in coefficient form
         Self::ifft(&mut a.values, self.omega_inv, self.k, self.ifft_divisor);
+        if let Some(ref t) = _t { eprintln!("[perf]   lagrange_to_coeff: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
         Polynomial {
             values: a.values,
@@ -242,11 +244,13 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         &self,
         mut a: Polynomial<F, Coeff>,
     ) -> Polynomial<F, ExtendedLagrangeCoeff> {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         assert_eq!(a.values.len(), 1 << self.k);
 
         self.distribute_powers_zeta(&mut a.values, true);
         a.values.resize(self.extended_len(), F::ZERO);
         best_fft(&mut a.values, self.extended_omega, self.extended_k);
+        if let Some(ref t) = _t { eprintln!("[perf]   coeff_to_extended: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
         Polynomial {
             values: a.values,
@@ -319,6 +323,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     /// length.
     // TODO/FIXME: caller should be responsible for truncating
     pub fn extended_to_coeff(&self, mut a: Polynomial<F, ExtendedLagrangeCoeff>) -> Vec<F> {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         assert_eq!(a.values.len(), self.extended_len());
 
         // Inverse FFT
@@ -338,6 +343,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         // it always lies on a power-of-two boundary.
         a.values
             .truncate((&self.n * self.quotient_poly_degree) as usize);
+        if let Some(ref t) = _t { eprintln!("[perf]   extended_to_coeff: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
         a.values
     }

@@ -64,6 +64,7 @@ impl Argument {
         mut rng: R,
         transcript: &mut T,
     ) -> Result<Committed<C, Ev>, Error> {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let domain = &pk.vk.domain;
 
         // How many columns can be included in a single permutation polynomial?
@@ -190,6 +191,7 @@ impl Argument {
             });
         }
 
+        if let Some(ref t) = _t { eprintln!("[perf]   permutation_commit_exclusive: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
         Ok(Committed { sets })
     }
 }

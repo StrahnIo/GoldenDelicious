@@ -162,10 +162,12 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             ctx: &AstContext<'_, F, B>,
             stack: &mut [Vec<F>],
             counters: &[AtomicU64; 7],
+            timers: &[AtomicU64; 7],
         ) {
             match ast {
                 Ast::Poly(leaf) => {
                     count(counters, 0);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     B::get_chunk_of_rotated_into(
                         out,
                         ctx.domain,
@@ -174,46 +176,57 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                         &ctx.polys[leaf.index],
                         leaf.rotation,
                     );
+                    if let Some(ref t) = _t { timers[0].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
                 Ast::Add(a, b) => {
                     count(counters, 1);
-                    recurse_into(out, b, ctx, stack, counters);
+                    recurse_into(out, b, ctx, stack, counters, timers);
                     let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, rest, counters);
+                    recurse_into(&mut first[0], a, ctx, rest, counters, timers);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     for i in 0..out.len() {
                         out[i] += first[0][i];
                     }
+                    if let Some(ref t) = _t { timers[1].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
                 Ast::Mul(AstMul(a, b)) => {
                     count(counters, 2);
-                    recurse_into(out, b, ctx, stack, counters);
+                    recurse_into(out, b, ctx, stack, counters, timers);
                     let (first, rest) = stack.split_at_mut(1);
-                    recurse_into(&mut first[0], a, ctx, rest, counters);
+                    recurse_into(&mut first[0], a, ctx, rest, counters, timers);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     for i in 0..out.len() {
                         out[i] *= first[0][i];
                     }
+                    if let Some(ref t) = _t { timers[2].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
                 Ast::Scale(a, scalar) => {
                     count(counters, 3);
-                    recurse_into(out, a, ctx, stack, counters);
+                    recurse_into(out, a, ctx, stack, counters, timers);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     for lhs in out.iter_mut() {
                         *lhs *= scalar;
                     }
+                    if let Some(ref t) = _t { timers[3].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
                 Ast::DistributePowers(terms, base) => {
                     count(counters, 4);
                     let mut terms = terms.iter();
                     if let Some(first_term) = terms.next() {
-                        recurse_into(out, first_term, ctx, stack, counters);
+                        recurse_into(out, first_term, ctx, stack, counters, timers);
                         for term in terms {
+                            let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                             for elem in out.iter_mut() {
                                 *elem *= base;
                             }
+                            if let Some(ref t) = _t { timers[3].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); } // Scale portion
                             let (first, rest) = stack.split_at_mut(1);
-                            recurse_into(&mut first[0], term, ctx, rest, counters);
+                            recurse_into(&mut first[0], term, ctx, rest, counters, timers);
+                            let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                             for i in 0..out.len() {
                                 out[i] += first[0][i];
                             }
+                            if let Some(ref t) = _t { timers[1].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); } // Add portion
                         }
                     } else {
                         out.fill(F::ZERO);
@@ -221,23 +234,38 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                 }
                 Ast::LinearTerm(scalar) => {
                     count(counters, 5);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     B::linear_term_into(out, ctx.domain, ctx.chunk_size, ctx.chunk_index, *scalar);
+                    if let Some(ref t) = _t { timers[5].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
                 Ast::ConstantTerm(scalar) => {
                     count(counters, 6);
+                    let _t = if std::env::var("PERF_DEBUG").is_ok() { let n = std::time::Instant::now(); Some(n) } else { None };
                     B::constant_term_into(out, *scalar);
+                    if let Some(ref t) = _t { timers[6].fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 }
             }
         }
 
         // Apply `ast` to each chunk in parallel, writing the result into an output
         // polynomial.
+        let _t_compile = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
+        let depth = ast.depth();
+        if let Some(ref tc) = _t_compile { eprintln!("[perf]   ast_compile_depth: {:.1}ms", tc.elapsed().as_secs_f64() * 1000.0); }
+
+        let _t_eval = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let counters: [AtomicU64; 7] = [
             AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
             AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
             AtomicU64::new(0),
         ];
+        let timers: [AtomicU64; 7] = [
+            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+            AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
+            AtomicU64::new(0),
+        ];
         let counters_ref = &counters;
+        let timers_ref = &timers;
         let depth = ast.depth();
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
@@ -253,15 +281,23 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
                     let mut scratch: Vec<Vec<F>> = (0..depth + 1)
                         .map(|_| vec![F::ZERO; out.len()])
                         .collect();
-                    recurse_into(out, ast, &ctx, &mut scratch[..], counters_ref);
+                    recurse_into(out, ast, &ctx, &mut scratch[..], counters_ref, timers_ref);
                 });
             }
         });
         if std::env::var("PERF_DEBUG").is_ok() {
             let c = |i: usize| counters[i].load(Ordering::Relaxed);
+            let t = |i: usize| timers[i].load(Ordering::Relaxed) as f64 / 1_000_000.0;
+            let total_ns = timers.iter().map(|t| t.load(Ordering::Relaxed)).sum::<u64>() as f64;
             eprintln!(
                 "[perf] AST: Poly={} Add={} Mul={} Scale={} DP={} Lin={} Const={}",
                 c(0), c(1), c(2), c(3), c(4), c(5), c(6)
+            );
+            eprintln!(
+                "[perf] AST_NS: Poly={:.1} Add={:.1} Mul={:.1} Scale={:.1} DP={:.1} Lin={:.1} Const={:.1}  (total self={:.1}ms wall={:.1}ms)",
+                t(0), t(1), t(2), t(3), t(4), t(5), t(6),
+                total_ns / 1_000_000.0,
+                _t_eval.as_ref().unwrap().elapsed().as_secs_f64() * 1000.0,
             );
         }
         result

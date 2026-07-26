@@ -103,6 +103,7 @@ impl<F: WithSmallOrderMulGroup<3>> Argument<F> {
         C: CurveAffine<ScalarExt = F>,
         C::Curve: Mul<F, Output = C::Curve> + MulAssign<F>,
     {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         // Closure to get values of expressions and compress them
         let compress_expressions = |expressions: &[Expression<C::Scalar>]| {
             // Values of input expressions involved in the lookup
@@ -229,6 +230,7 @@ impl<F: WithSmallOrderMulGroup<3>> Argument<F> {
         let permuted_table_coset = coset_evaluator
             .register_poly(pk.vk.domain.coeff_to_extended(permuted_table_poly.clone()));
 
+        if let Some(ref t) = _t { eprintln!("[perf]   lookup_commit_permuted: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
         Ok(Permuted {
             compressed_input_expression,
             compressed_input_coset,
@@ -267,6 +269,7 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         mut rng: R,
         transcript: &mut T,
     ) -> Result<Committed<C, Ev>, Error> {
+        let _t = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let blinding_factors = pk.vk.cs.blinding_factors();
         // Goal is to compute the products of fractions
         //
@@ -386,6 +389,7 @@ impl<C: CurveAffine, Ev: Copy + Send + Sync> Permuted<C, Ev> {
         // Hash product commitment
         transcript.write_point(product_commitment)?;
 
+        if let Some(ref t) = _t { eprintln!("[perf]   lookup_commit_product: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
         Ok(Committed::<C, _> {
             permuted: self,
             product_poly: z,
