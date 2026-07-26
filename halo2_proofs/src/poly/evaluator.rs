@@ -15,6 +15,11 @@ use super::{
 };
 use crate::multicore;
 
+#[cfg(feature = "fuji")]
+use fuji as fuji_crate;
+#[cfg(feature = "fuji")]
+use crate::arithmetic::fuji as fuji_helpers;
+
 /// Returns `(chunk_size, num_chunks)` suitable for processing the given polynomial length
 /// in the current parallelization environment.
 fn get_chunk_params(poly_len: usize) -> (usize, usize) {
@@ -95,6 +100,8 @@ impl<E, B: Basis> AstLeaf<E, B> {
 pub(crate) struct Evaluator<E, F: Field, B: Basis> {
     polys: Vec<Polynomial<F, B>>,
     _context: E,
+    #[cfg(feature = "fuji")]
+    fuji_curve: Option<fuji_crate::FujiCurve>,
 }
 
 /// Constructs a new `Evaluator`.
@@ -107,6 +114,8 @@ pub(crate) fn new_evaluator<E: Fn() + Clone, F: Field, B: Basis>(context: E) -> 
     Evaluator {
         polys: vec![],
         _context: context,
+        #[cfg(feature = "fuji")]
+        fuji_curve: None,
     }
 }
 
@@ -126,7 +135,13 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         }
     }
 
-    /// Evaluates the given polynomial operation against this context.
+    /// Enable the Fuji SME-accelerated flat evaluator path.
+    #[cfg(feature = "fuji")]
+    pub(crate) fn enable_fuji(&mut self, curve: fuji_crate::FujiCurve) {
+        self.fuji_curve = Some(curve);
+    }
+
+        // Evaluates the given polynomial operation against this context.
     pub(crate) fn evaluate(
         &self,
         ast: &Ast<E, F, B>,
@@ -134,16 +149,22 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     ) -> Polynomial<F, B>
     where
         E: Copy + Send + Sync,
-        F: WithSmallOrderMulGroup<3>,
+        F: WithSmallOrderMulGroup<3> + ff::PrimeField,
         B: BasisOps,
     {
+        #[cfg(feature = "fuji")]
+        if let Some(ref curve) = self.fuji_curve {
+            if fuji_helpers::fuji_available() {
+                return self.evaluate_fuji(ast, domain, *curve);
+            }
+        }
+
         // We're working in a single basis, so all polynomials are the same length.
         let poly_len = self.polys.first().unwrap().len();
         let (chunk_size, _num_chunks) = get_chunk_params(poly_len);
 
         struct AstContext<'a, F: Field, B: Basis> {
             domain: &'a EvaluationDomain<F>,
-            poly_len: usize,
             chunk_size: usize,
             chunk_index: usize,
             polys: &'a [Polynomial<F, B>],
@@ -250,8 +271,8 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         // Apply `ast` to each chunk in parallel, writing the result into an output
         // polynomial.
         let _t_compile = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
-        let depth = ast.depth();
-        if let Some(ref tc) = _t_compile { eprintln!("[perf]   ast_compile_depth: {:.1}ms", tc.elapsed().as_secs_f64() * 1000.0); }
+        let _depth = ast.depth();
+        if let Some(ref tc) = _t_compile { eprintln!("[perf]   ast_compile_depth: {:.1}ms depth={}", tc.elapsed().as_secs_f64() * 1000.0, _depth); }
 
         let _t_eval = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let counters: [AtomicU64; 7] = [
@@ -266,14 +287,13 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
         ];
         let counters_ref = &counters;
         let timers_ref = &timers;
-        let depth = ast.depth();
+        let depth = _depth;
         let mut result = B::empty_poly(domain);
         multicore::scope(|scope| {
             for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
                 scope.spawn(move |_| {
                     let ctx = AstContext {
                         domain,
-                        poly_len,
                         chunk_size,
                         chunk_index,
                         polys: &self.polys,
@@ -301,6 +321,193 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
             );
         }
         result
+    }
+
+    /// Evaluate using Fuji's flat-instruction SME evaluator.
+    #[cfg(feature = "fuji")]
+    fn evaluate_fuji(
+        &self,
+        ast: &Ast<E, F, B>,
+        domain: &EvaluationDomain<F>,
+        curve: fuji_crate::FujiCurve,
+    ) -> Polynomial<F, B>
+    where
+        F: WithSmallOrderMulGroup<3> + ff::PrimeField,
+        B: BasisOps,
+    {
+
+        let poly_len = self.polys.first().unwrap().len();
+        let domain_n = 1 << domain.k();
+        let stride = poly_len / domain_n; // = 2^(extended_k - k) for Extended, =1 for Lagrange
+        let chunk_len = 410;
+        let num_chunks = (poly_len + chunk_len - 1) / chunk_len;
+
+        // Convert all polynomials to Montgomery form
+        let poly_table: Vec<fuji_crate::eval::PolyEntry> = self
+            .polys
+            .iter()
+            .map(|poly| fuji_crate::eval::PolyEntry {
+                data: poly
+                    .values
+                    .iter()
+                    .map(|f| {
+                        let mut buf = [0u8; 32];
+                        let repr = f.to_repr();
+                        let bytes: &[u8] = repr.as_ref();
+                        buf[..bytes.len()].copy_from_slice(bytes);
+                        let normal = fuji_crate::FujiField::from_bytes(&buf);
+                        normal.to_mont(curve)
+                    })
+                    .collect(),
+                domain_size: poly.values.len(),
+            })
+            .collect();
+
+        // Compile AST → flat instructions + scalars
+        let omega_native = domain.get_extended_omega();
+        let (code, scalars) = compile_ast(ast, stride as u32, omega_native, curve);
+        let max_depth = fuji_crate::eval::estimate_depth(&code);
+
+        // Execute chunks sequentially
+        let mut ctx = fuji_crate::eval::EvalContext {
+            chunk_len,
+            chunk_start: 0,
+            max_depth,
+            poly_table,
+            omega: {
+                let mut buf = [0u8; 32];
+                let repr = omega_native.to_repr();
+                let bytes: &[u8] = repr.as_ref();
+                buf[..bytes.len()].copy_from_slice(bytes);
+                fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+            },
+            scalars,
+        };
+
+        let mut scratch: Vec<Vec<fuji_crate::FujiField>> = (0..max_depth)
+            .map(|_| vec![fuji_crate::FujiField::zero(); chunk_len])
+            .collect();
+        let mut out_buf = vec![fuji_crate::FujiField::zero(); chunk_len];
+        let mut result_vals: Vec<F> = Vec::with_capacity(poly_len);
+
+        for chunk in 0..num_chunks {
+            let start = chunk * chunk_len;
+            let actual_len = std::cmp::min(chunk_len, poly_len - start);
+            ctx.chunk_start = start;
+
+            for row in scratch.iter_mut() {
+                row.resize(actual_len, fuji_crate::FujiField::zero());
+            }
+            out_buf.resize(actual_len, fuji_crate::FujiField::zero());
+
+            fuji_crate::eval::execute_chunk(&code, &ctx, &mut scratch, &mut out_buf);
+
+            // Convert results back from Montgomery to native field
+            for val in &out_buf[..actual_len] {
+                let norm = val.from_mont(curve);
+                let bytes = norm.to_bytes();
+                let mut repr = F::Repr::default();
+                let dst: &mut [u8] = repr.as_mut();
+                dst.copy_from_slice(&bytes);
+                result_vals.push(F::from_repr(repr).unwrap());
+            }
+        }
+
+        Polynomial {
+            values: result_vals,
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Compile a recursive AST (ExtendedLagrangeCoeff basis) into a flat
+/// `Vec<fuji_crate::eval::Instr>` plus a scalar table. All scalars are
+/// emitted in Montgomery form.
+#[cfg(feature = "fuji")]
+fn compile_ast<Ev, F: WithSmallOrderMulGroup<3>, B: Basis>(
+    ast: &Ast<Ev, F, B>,
+    stride: u32,
+    omega_native: F,
+    curve: fuji_crate::FujiCurve,
+) -> (Vec<fuji_crate::eval::Instr>, Vec<fuji_crate::FujiField>) {
+    let mut code = Vec::new();
+    let mut scalars = Vec::new();
+    compile_node(ast, &mut code, &mut scalars, stride, omega_native, curve);
+    (code, scalars)
+}
+
+#[cfg(feature = "fuji")]
+fn push_scalar<F: ff::PrimeField + Field>(
+    scalars: &mut Vec<fuji_crate::FujiField>,
+    f: F,
+    curve: fuji_crate::FujiCurve,
+) -> u32 {
+    let mut buf = [0u8; 32];
+    let repr = f.to_repr();
+    let bytes: &[u8] = repr.as_ref();
+    buf[..bytes.len()].copy_from_slice(bytes);
+    let normal = fuji_crate::FujiField::from_bytes(&buf);
+    let mont = normal.to_mont(curve);
+    let idx = scalars.len() as u32;
+    scalars.push(mont);
+    idx
+}
+
+#[cfg(feature = "fuji")]
+fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
+    ast: &Ast<E, F, B>,
+    code: &mut Vec<fuji_crate::eval::Instr>,
+    scalars: &mut Vec<fuji_crate::FujiField>,
+    stride: u32,
+    omega_native: F,
+    curve: fuji_crate::FujiCurve,
+) {
+    match ast {
+        Ast::Poly(leaf) => {
+            let elt_rotation = leaf.rotation.0 * stride as i32;
+            code.push(fuji_crate::eval::Instr::LoadRotated {
+                col: leaf.index as u32,
+                rotation: elt_rotation,
+            });
+        }
+        Ast::Add(a, b) => {
+            compile_node(b, code, scalars, stride, omega_native, curve);
+            compile_node(a, code, scalars, stride, omega_native, curve);
+            code.push(fuji_crate::eval::Instr::Add);
+        }
+        Ast::Mul(AstMul(a, b)) => {
+            compile_node(b, code, scalars, stride, omega_native, curve);
+            compile_node(a, code, scalars, stride, omega_native, curve);
+            code.push(fuji_crate::eval::Instr::Mul);
+        }
+        Ast::Scale(a, scalar) => {
+            compile_node(a, code, scalars, stride, omega_native, curve);
+            let idx = push_scalar(scalars, *scalar, curve);
+            code.push(fuji_crate::eval::Instr::Scale { scalar_idx: idx });
+        }
+        Ast::DistributePowers(terms, base) => {
+            let mut terms = terms.iter();
+            if let Some(first) = terms.next() {
+                compile_node(first, code, scalars, stride, omega_native, curve);
+                for term in terms {
+                    compile_node(term, code, scalars, stride, omega_native, curve);
+                    let idx = push_scalar(scalars, *base, curve);
+                    code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx });
+                }
+            } else {
+                let idx = push_scalar(scalars, F::ZERO, curve);
+                code.push(fuji_crate::eval::Instr::Constant { scalar_idx: idx });
+            }
+        }
+        Ast::LinearTerm(scalar) => {
+            let zeta_scaled = *scalar * F::ZETA;
+            let idx = push_scalar(scalars, zeta_scaled, curve);
+            code.push(fuji_crate::eval::Instr::LinearTerm { scalar_idx: idx });
+        }
+        Ast::ConstantTerm(scalar) => {
+            let idx = push_scalar(scalars, *scalar, curve);
+            code.push(fuji_crate::eval::Instr::Constant { scalar_idx: idx });
+        }
     }
 }
 

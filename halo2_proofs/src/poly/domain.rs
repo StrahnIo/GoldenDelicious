@@ -406,6 +406,16 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         });
     }
 
+    /// Get the main domain size parameter k (2^k = n).
+    pub fn k(&self) -> u32 {
+        self.k
+    }
+
+    /// Get the extended domain size parameter.
+    pub fn extended_k(&self) -> u32 {
+        self.extended_k
+    }
+
     /// Get the size of the extended domain
     pub fn extended_len(&self) -> usize {
         1 << self.extended_k

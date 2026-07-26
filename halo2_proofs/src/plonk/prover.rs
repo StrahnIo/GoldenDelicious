@@ -356,6 +356,7 @@ pub fn create_proof<
     perf_phase!("synthesize + advice");
 
     // Create polynomial evaluator context for values.
+    #[allow(unused_mut)]
     let mut value_evaluator = poly::new_evaluator(|| {});
 
     // Register fixed values with the polynomial evaluator.
@@ -390,7 +391,13 @@ pub fn create_proof<
         .collect();
 
     // Create polynomial evaluator context for cosets.
+    #[allow(unused_mut)]
     let mut coset_evaluator = poly::new_evaluator(|| {});
+    #[cfg(feature = "fuji")]
+    {
+        coset_evaluator.enable_fuji(params.fuji_curve);
+        value_evaluator.enable_fuji(params.fuji_curve);
+    }
 
     // Register fixed cosets with the polynomial evaluator.
     let fixed_cosets: Vec<_> = pk
