@@ -752,19 +752,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fuji-pasta"
-version = "0.1.0"
-dependencies = [
- "ff",
- "fuji",
- "fuji-sys",
- "group",
- "pasta_curves",
- "rand_core",
- "subtle",
-]
-
-[[package]]
 name = "fuji-sys"
 version = "0.1.0"
 
@@ -918,7 +905,6 @@ dependencies = [
  "dashmap",
  "ff",
  "fuji",
- "fuji-pasta",
  "getrandom",
  "group",
  "gumdrop",
