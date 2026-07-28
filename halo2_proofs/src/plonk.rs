@@ -7,6 +7,7 @@
 
 use blake2b_simd::Params as Blake2bParams;
 use group::ff::{Field, FromUniformBytes, PrimeField};
+use std::io::{Read, Write};
 
 use crate::arithmetic::CurveAffine;
 use crate::poly::{
@@ -140,17 +141,114 @@ pub struct ProvingKey<C: CurveAffine> {
     permutation: permutation::ProvingKey<C>,
 }
 
-impl<C: CurveAffine> ProvingKey<C> {
+impl<C: CurveAffine> ProvingKey<C> where C::Scalar: PrimeField {
     /// Get the underlying [`VerifyingKey`].
     pub fn get_vk(&self) -> &VerifyingKey<C> {
         &self.vk
     }
+
+    /// Serialize this proving key to a writer.
+    pub fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.vk.write(writer)?;
+        self.l0.write(writer)?;
+        self.l_blind.write(writer)?;
+        self.l_last.write(writer)?;
+        let wv = |v: &[Polynomial<C::Scalar, LagrangeCoeff>], w: &mut W| -> std::io::Result<()> {
+            w.write_all(&(v.len() as u64).to_le_bytes())?;
+            for p in v { p.write(w)?; }
+            Ok(())
+        };
+        let wv2 = |v: &[Polynomial<C::Scalar, Coeff>], w: &mut W| -> std::io::Result<()> {
+            w.write_all(&(v.len() as u64).to_le_bytes())?;
+            for p in v { p.write(w)?; }
+            Ok(())
+        };
+        let wv3 = |v: &[Polynomial<C::Scalar, ExtendedLagrangeCoeff>], w: &mut W| -> std::io::Result<()> {
+            w.write_all(&(v.len() as u64).to_le_bytes())?;
+            for p in v { p.write(w)?; }
+            Ok(())
+        };
+        wv(&self.fixed_values, writer)?;
+        wv2(&self.fixed_polys, writer)?;
+        wv3(&self.fixed_cosets, writer)?;
+        self.permutation.write(writer)?;
+        Ok(())
+    }
+
+    /// Deserialize a proving key from a reader.
+    pub fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let rv = |r: &mut R| -> std::io::Result<Vec<Polynomial<C::Scalar, LagrangeCoeff>>> {
+            let mut buf = [0u8; 8]; r.read_exact(&mut buf)?;
+            let n = u64::from_le_bytes(buf) as usize;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n { v.push(Polynomial::read(r)?); }
+            Ok(v)
+        };
+        let rv2 = |r: &mut R| -> std::io::Result<Vec<Polynomial<C::Scalar, Coeff>>> {
+            let mut buf = [0u8; 8]; r.read_exact(&mut buf)?;
+            let n = u64::from_le_bytes(buf) as usize;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n { v.push(Polynomial::read(r)?); }
+            Ok(v)
+        };
+        let rv3 = |r: &mut R| -> std::io::Result<Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>>> {
+            let mut buf = [0u8; 8]; r.read_exact(&mut buf)?;
+            let n = u64::from_le_bytes(buf) as usize;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n { v.push(Polynomial::read(r)?); }
+            Ok(v)
+        };
+        Ok(ProvingKey {
+            vk: VerifyingKey::read(reader)?,
+            l0: Polynomial::read(reader)?,
+            l_blind: Polynomial::read(reader)?,
+            l_last: Polynomial::read(reader)?,
+            fixed_values: rv(reader)?,
+            fixed_polys: rv2(reader)?,
+            fixed_cosets: rv3(reader)?,
+            permutation: permutation::ProvingKey::read(reader)?,
+        })
+    }
 }
 
-impl<C: CurveAffine> VerifyingKey<C> {
+impl<C: CurveAffine> VerifyingKey<C> where C::Scalar: PrimeField {
     /// Get the underlying [`EvaluationDomain`].
     pub fn get_domain(&self) -> &EvaluationDomain<C::Scalar> {
         &self.domain
+    }
+
+    /// Serialize this verifying key to a writer.
+    pub fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.domain.write(writer)?;
+        writer.write_all(&(self.fixed_commitments.len() as u64).to_le_bytes())?;
+        for c in &self.fixed_commitments {
+            let bytes = c.to_bytes();
+            writer.write_all(bytes.as_ref())?;
+        }
+        self.permutation.write(writer)?;
+        self.cs.write(writer)?;
+        writer.write_all(&(self.cs_degree as u64).to_le_bytes())?;
+        Ok(())
+    }
+
+    /// Deserialize a verifying key from a reader.
+    pub fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let domain = EvaluationDomain::read(reader)?;
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?;
+        let nfc = u64::from_le_bytes(buf) as usize;
+        let mut fixed_commitments = Vec::with_capacity(nfc);
+        for _ in 0..nfc {
+            let mut repr = C::Repr::default();
+            reader.read_exact(repr.as_mut())?;
+            fixed_commitments.push(C::from_bytes(&repr).unwrap_or_else(C::identity));
+        }
+        let permutation = permutation::VerifyingKey::read(reader)?;
+        let cs = ConstraintSystem::read(reader)?;
+        reader.read_exact(&mut buf)?;
+        let cs_degree = u64::from_le_bytes(buf) as usize;
+        let transcript_repr = C::Scalar::ZERO;
+        Ok(VerifyingKey { domain, fixed_commitments, permutation, cs, cs_degree, transcript_repr })
     }
 }
 

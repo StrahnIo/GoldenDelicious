@@ -11,7 +11,10 @@ use super::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation};
 use ff::WithSmallOrderMulGroup;
 use group::ff::{BatchInvert, Field};
 
+use std::io::{Read, Write};
 use std::marker::PhantomData;
+
+use ff::PrimeField;
 
 /// This structure contains precomputed constants and other details needed for
 /// performing operations on an evaluation domain of size $2^k$ and an extended
@@ -404,6 +407,70 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
                 *a *= &divisor;
             }
         });
+    }
+
+    /// Serialize this evaluation domain to a writer.
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.n.to_le_bytes())?;
+        writer.write_all(&self.k.to_le_bytes())?;
+        writer.write_all(&self.extended_k.to_le_bytes())?;
+        writer.write_all(&self.quotient_poly_degree.to_le_bytes())?;
+        writer.write_all(self.omega.to_repr().as_ref())?;
+        writer.write_all(self.omega_inv.to_repr().as_ref())?;
+        writer.write_all(self.extended_omega.to_repr().as_ref())?;
+        writer.write_all(self.extended_omega_inv.to_repr().as_ref())?;
+        writer.write_all(self.g_coset.to_repr().as_ref())?;
+        writer.write_all(self.g_coset_inv.to_repr().as_ref())?;
+        writer.write_all(self.ifft_divisor.to_repr().as_ref())?;
+        writer.write_all(self.extended_ifft_divisor.to_repr().as_ref())?;
+        writer.write_all(&(self.t_evaluations.len() as u64).to_le_bytes())?;
+        for v in &self.t_evaluations {
+            writer.write_all(v.to_repr().as_ref())?;
+        }
+        writer.write_all(self.barycentric_weight.to_repr().as_ref())?;
+        Ok(())
+    }
+
+    /// Deserialize an evaluation domain from a reader.
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut u64_buf = [0u8; 8];
+        let mut u32_buf = [0u8; 4];
+        let mut repr: Vec<u8> = vec![0u8; <F as PrimeField>::Repr::default().as_ref().len()];
+
+        reader.read_exact(&mut u64_buf)?; let n = u64::from_le_bytes(u64_buf);
+        reader.read_exact(&mut u32_buf)?; let k = u32::from_le_bytes(u32_buf);
+        reader.read_exact(&mut u32_buf)?; let extended_k = u32::from_le_bytes(u32_buf);
+        reader.read_exact(&mut u64_buf)?; let quotient_poly_degree = u64::from_le_bytes(u64_buf);
+
+        let mut rd_f = |r: &mut R| -> std::io::Result<F> {
+            let mut fr = F::Repr::default();
+            r.read_exact(fr.as_mut())?;
+            Ok(F::from_repr(fr).unwrap())
+        };
+
+        let omega = rd_f(reader)?;
+        let omega_inv = rd_f(reader)?;
+        let extended_omega = rd_f(reader)?;
+        let extended_omega_inv = rd_f(reader)?;
+        let g_coset = rd_f(reader)?;
+        let g_coset_inv = rd_f(reader)?;
+        let ifft_divisor = rd_f(reader)?;
+        let extended_ifft_divisor = rd_f(reader)?;
+
+        reader.read_exact(&mut u64_buf)?;
+        let t_len = u64::from_le_bytes(u64_buf) as usize;
+        let mut t_evaluations = Vec::with_capacity(t_len);
+        for _ in 0..t_len { t_evaluations.push(rd_f(reader)?); }
+
+        let barycentric_weight = rd_f(reader)?;
+
+        Ok(EvaluationDomain {
+            n, k, extended_k, quotient_poly_degree,
+            omega, omega_inv, extended_omega, extended_omega_inv,
+            g_coset, g_coset_inv,
+            ifft_divisor, extended_ifft_divisor,
+            t_evaluations, barycentric_weight,
+        })
     }
 
     /// Get the main domain size parameter k (2^k = n).

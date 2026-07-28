@@ -1,5 +1,6 @@
 use super::circuit::Expression;
-use ff::Field;
+use ff::{Field, PrimeField};
+use std::io::{Read, Write};
 
 pub(crate) mod prover;
 pub(crate) mod verifier;
@@ -68,5 +69,31 @@ impl<F: Field> Argument<F> {
             // (1 - (l_last + l_blind)) z(X) (\theta^{m-1} a_0(X) + ... + a_{m-1}(X) + \beta) (\theta^{m-1} s_0(X) + ... + s_{m-1}(X) + \gamma)
             2 + input_degree + table_degree,
         )
+    }
+}
+
+impl<F: PrimeField> Argument<F> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let we = |v: &[Expression<F>], w: &mut W| -> std::io::Result<()> {
+            w.write_all(&(v.len() as u64).to_le_bytes())?;
+            for e in v { e.write(w)?; }
+            Ok(())
+        };
+        we(&self.input_expressions, writer)?;
+        we(&self.table_expressions, writer)?;
+        Ok(())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let re = |r: &mut R| -> std::io::Result<Vec<Expression<F>>> {
+            let mut buf = [0u8; 8]; r.read_exact(&mut buf)?;
+            let n = u64::from_le_bytes(buf) as usize;
+            let mut v = Vec::with_capacity(n);
+            for _ in 0..n { v.push(Expression::read(r)?); }
+            Ok(v)
+        };
+        Ok(Argument {
+            input_expressions: re(reader)?,
+            table_expressions: re(reader)?,
+        })
     }
 }

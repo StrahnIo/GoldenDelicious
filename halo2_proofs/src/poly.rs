@@ -8,6 +8,7 @@ use crate::plonk::Assigned;
 use group::ff::{BatchInvert, Field};
 
 use std::fmt::Debug;
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, RangeFrom, RangeFull};
 
@@ -112,7 +113,30 @@ impl<F, B> DerefMut for Polynomial<F, B> {
     }
 }
 
-impl<F, B> Polynomial<F, B> {
+impl<F: ff::PrimeField, B> Polynomial<F, B> {
+    /// Serialize this polynomial to a writer.
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&(self.values.len() as u64).to_le_bytes())?;
+        for v in &self.values {
+            writer.write_all(v.to_repr().as_ref())?;
+        }
+        Ok(())
+    }
+
+    /// Deserialize a polynomial from a reader.
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut len_buf = [0u8; 8];
+        reader.read_exact(&mut len_buf)?;
+        let len = u64::from_le_bytes(len_buf) as usize;
+        let mut values = Vec::with_capacity(len);
+        for _ in 0..len {
+            let mut repr = F::Repr::default();
+            reader.read_exact(repr.as_mut())?;
+            values.push(F::from_repr(repr).unwrap());
+        }
+        Ok(Polynomial { values, _marker: PhantomData })
+    }
+
     /// Iterate over the values, which are either in coefficient or evaluation
     /// form depending on the basis `B`.
     pub fn iter(&self) -> impl Iterator<Item = &F> {

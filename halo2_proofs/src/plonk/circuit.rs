@@ -1,8 +1,9 @@
 use core::cmp::max;
 use core::ops::{Add, Mul};
-use ff::Field;
+use ff::{Field, PrimeField};
 use std::{
     convert::TryFrom,
+    io::{Read, Write},
     ops::{Neg, Sub},
 };
 
@@ -507,6 +508,39 @@ pub enum Expression<F> {
     Scaled(Box<Expression<F>>, F),
 }
 
+impl<F: PrimeField> Expression<F> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        match self {
+            Expression::Constant(s) => { writer.write_all(&[0u8])?; writer.write_all(s.to_repr().as_ref())?; }
+            Expression::Selector(s) => { writer.write_all(&[1u8])?; writer.write_all(&s.0.to_le_bytes())?; }
+            Expression::Fixed(q) => { writer.write_all(&[2u8])?; q.write(writer)?; }
+            Expression::Advice(q) => { writer.write_all(&[3u8])?; q.write(writer)?; }
+            Expression::Instance(q) => { writer.write_all(&[4u8])?; q.write(writer)?; }
+            Expression::Negated(a) => { writer.write_all(&[5u8])?; a.write(writer)?; }
+            Expression::Sum(a, b) => { writer.write_all(&[6u8])?; a.write(writer)?; b.write(writer)?; }
+            Expression::Product(a, b) => { writer.write_all(&[7u8])?; a.write(writer)?; b.write(writer)?; }
+            Expression::Scaled(a, s) => { writer.write_all(&[8u8])?; a.write(writer)?; writer.write_all(s.to_repr().as_ref())?; }
+        }
+        Ok(())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut tag = [0u8];
+        reader.read_exact(&mut tag)?;
+        match tag[0] {
+            0 => { let mut r = F::Repr::default(); reader.read_exact(r.as_mut())?; Ok(Expression::Constant(F::from_repr(r).unwrap())) }
+            1 => { let mut buf = [0u8; 8]; reader.read_exact(&mut buf)?; Ok(Expression::Selector(Selector(usize::from_le_bytes(buf), true))) }
+            2 => { Ok(Expression::Fixed(FixedQuery::read(reader)?)) }
+            3 => { Ok(Expression::Advice(AdviceQuery::read(reader)?)) }
+            4 => { Ok(Expression::Instance(InstanceQuery::read(reader)?)) }
+            5 => { Ok(Expression::Negated(Box::new(Expression::read(reader)?))) }
+            6 => { let a = Expression::read(reader)?; let b = Expression::read(reader)?; Ok(Expression::Sum(Box::new(a), Box::new(b))) }
+            7 => { let a = Expression::read(reader)?; let b = Expression::read(reader)?; Ok(Expression::Product(Box::new(a), Box::new(b))) }
+            8 => { let a = Expression::read(reader)?; let mut r = F::Repr::default(); reader.read_exact(r.as_mut())?; Ok(Expression::Scaled(Box::new(a), F::from_repr(r).unwrap())) }
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown expression tag"))
+        }
+    }
+}
+
 impl<F: Field> Expression<F> {
     /// Evaluate the polynomial using the provided closures to perform the
     /// operations.
@@ -719,6 +753,54 @@ impl<F: std::fmt::Debug> std::fmt::Debug for Expression<F> {
     }
 }
 
+impl FixedQuery {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.index.to_le_bytes())?;
+        writer.write_all(&self.column_index.to_le_bytes())?;
+        writer.write_all(&self.rotation.0.to_le_bytes())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?; let index = usize::from_le_bytes(buf);
+        reader.read_exact(&mut buf)?; let column_index = usize::from_le_bytes(buf);
+        let mut rot_buf = [0u8; 4];
+        reader.read_exact(&mut rot_buf)?;
+        Ok(FixedQuery { index, column_index, rotation: crate::poly::Rotation(i32::from_le_bytes(rot_buf)) })
+    }
+}
+
+impl AdviceQuery {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.index.to_le_bytes())?;
+        writer.write_all(&self.column_index.to_le_bytes())?;
+        writer.write_all(&self.rotation.0.to_le_bytes())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?; let index = usize::from_le_bytes(buf);
+        reader.read_exact(&mut buf)?; let column_index = usize::from_le_bytes(buf);
+        let mut rot_buf = [0u8; 4];
+        reader.read_exact(&mut rot_buf)?;
+        Ok(AdviceQuery { index, column_index, rotation: crate::poly::Rotation(i32::from_le_bytes(rot_buf)) })
+    }
+}
+
+impl InstanceQuery {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.index.to_le_bytes())?;
+        writer.write_all(&self.column_index.to_le_bytes())?;
+        writer.write_all(&self.rotation.0.to_le_bytes())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?; let index = usize::from_le_bytes(buf);
+        reader.read_exact(&mut buf)?; let column_index = usize::from_le_bytes(buf);
+        let mut rot_buf = [0u8; 4];
+        reader.read_exact(&mut rot_buf)?;
+        Ok(InstanceQuery { index, column_index, rotation: crate::poly::Rotation(i32::from_le_bytes(rot_buf)) })
+    }
+}
+
 impl<F: Field> Neg for Expression<F> {
     type Output = Expression<F>;
     fn neg(self) -> Self::Output {
@@ -804,6 +886,71 @@ impl<F: Field> From<(&'static str, Expression<F>)> for Constraint<F> {
 impl<F: Field> From<Expression<F>> for Vec<Constraint<F>> {
     fn from(poly: Expression<F>) -> Self {
         vec![Constraint { name: "", poly }]
+    }
+}
+
+impl VirtualCell {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        Column::<Any>::write_column(&self.column, writer)?;
+        writer.write_all(&self.rotation.0.to_le_bytes())?;
+        Ok(())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let column = Column::<Any>::read_column(reader)?;
+        let mut rot_buf = [0u8; 4];
+        reader.read_exact(&mut rot_buf)?;
+        Ok(VirtualCell { column, rotation: crate::poly::Rotation(i32::from_le_bytes(rot_buf)) })
+    }
+}
+
+impl Column<Any> {
+    pub(crate) fn write_column<W: Write>(col: &Column<impl ColumnType + Into<Any>>, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&col.index.to_le_bytes())?;
+        let tag: Any = col.column_type.into();
+        writer.write_all(&[tag as u8])?;
+        Ok(())
+    }
+    pub(crate) fn read_column<R: Read>(reader: &mut R) -> std::io::Result<Column<Any>> {
+        let mut buf = [0u8; 8];
+        reader.read_exact(&mut buf)?;
+        let index = usize::from_le_bytes(buf);
+        let mut tag = [0u8];
+        reader.read_exact(&mut tag)?;
+        let ct = match tag[0] {
+            0 => Any::Fixed,
+            1 => Any::Advice,
+            2 => Any::Instance,
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown column type")),
+        };
+        Ok(Column { index, column_type: ct })
+    }
+}
+
+impl<F: PrimeField> Gate<F> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&(self.polys.len() as u64).to_le_bytes())?;
+        for p in &self.polys { p.write(writer)?; }
+        writer.write_all(&(self.queried_selectors.len() as u64).to_le_bytes())?;
+        for s in &self.queried_selectors { writer.write_all(&s.0.to_le_bytes())?; }
+        writer.write_all(&(self.queried_cells.len() as u64).to_le_bytes())?;
+        for c in &self.queried_cells { c.write(writer)?; }
+        Ok(())
+    }
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut u64_buf = [0u8; 8];
+        reader.read_exact(&mut u64_buf)?; let np = u64::from_le_bytes(u64_buf) as usize;
+        let mut polys = Vec::with_capacity(np);
+        for _ in 0..np { polys.push(Expression::read(reader)?); }
+        reader.read_exact(&mut u64_buf)?; let nq = u64::from_le_bytes(u64_buf) as usize;
+        let mut queried_selectors = Vec::with_capacity(nq);
+        for _ in 0..nq {
+            let mut buf = [0u8; 8]; reader.read_exact(&mut buf)?;
+            queried_selectors.push(Selector(usize::from_le_bytes(buf), true));
+        }
+        reader.read_exact(&mut u64_buf)?; let nc = u64::from_le_bytes(u64_buf) as usize;
+        let mut queried_cells = Vec::with_capacity(nc);
+        for _ in 0..nc { queried_cells.push(VirtualCell::read(reader)?); }
+        Ok(Gate { name: "", constraint_names: vec![], polys, queried_selectors, queried_cells })
     }
 }
 
@@ -958,6 +1105,105 @@ pub struct ConstraintSystem<F: Field> {
     pub(crate) constants: Vec<Column<Fixed>>,
 
     pub(crate) minimum_degree: Option<usize>,
+}
+
+impl<F: PrimeField> ConstraintSystem<F> {
+    pub(crate) fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        macro_rules! wc { ($col:expr, $w:expr) => {{
+            $w.write_all(&$col.index.to_le_bytes())?;
+            let tag: Any = $col.column_type.into();
+            $w.write_all(&[tag as u8])
+        }}; }
+        macro_rules! wcr { ($pair:expr, $w:expr) => {{
+            wc!($pair.0, $w)?;
+            $w.write_all(&$pair.1.0.to_le_bytes())
+        }}; }
+        writer.write_all(&self.num_fixed_columns.to_le_bytes())?;
+        writer.write_all(&self.num_advice_columns.to_le_bytes())?;
+        writer.write_all(&self.num_instance_columns.to_le_bytes())?;
+        writer.write_all(&self.num_selectors.to_le_bytes())?;
+        writer.write_all(&(self.selector_map.len() as u64).to_le_bytes())?;
+        for c in &self.selector_map { wc!(c, writer); }
+        writer.write_all(&(self.gates.len() as u64).to_le_bytes())?;
+        for g in &self.gates { g.write(writer)?; }
+        writer.write_all(&(self.advice_queries.len() as u64).to_le_bytes())?;
+        for q in &self.advice_queries { wcr!(q, writer); }
+        writer.write_all(&(self.num_advice_queries.len() as u64).to_le_bytes())?;
+        for n in &self.num_advice_queries { writer.write_all(&n.to_le_bytes())?; }
+        writer.write_all(&(self.instance_queries.len() as u64).to_le_bytes())?;
+        for q in &self.instance_queries { wcr!(q, writer); }
+        writer.write_all(&(self.fixed_queries.len() as u64).to_le_bytes())?;
+        for q in &self.fixed_queries { wcr!(q, writer); }
+        self.permutation.write(writer)?;
+        writer.write_all(&(self.lookups.len() as u64).to_le_bytes())?;
+        for l in &self.lookups { l.write(writer)?; }
+        writer.write_all(&(self.constants.len() as u64).to_le_bytes())?;
+        for c in &self.constants { wc!(c, writer); }
+        writer.write_all(&[if self.minimum_degree.is_some() { 1 } else { 0 }])?;
+        if let Some(d) = self.minimum_degree { writer.write_all(&d.to_le_bytes())?; }
+        Ok(())
+    }
+
+    pub(crate) fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut u64b = [0u8; 8]; let mut u32b = [0u8; 4]; let mut u8b = [0u8; 1];
+
+        macro_rules! u1 { () => {{ reader.read_exact(&mut u64b)?; usize::from_le_bytes(u64b) }}; }
+        macro_rules! r1 { () => {{ reader.read_exact(&mut u32b)?; Rotation(i32::from_le_bytes(u32b)) }}; }
+        macro_rules! any { () => {{
+            reader.read_exact(&mut u64b)?; let i = usize::from_le_bytes(u64b);
+            reader.read_exact(&mut u8b)?;
+            let c = match u8b[0] { 0 => Any::Fixed, 1 => Any::Advice, 2 => Any::Instance, _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad tag")) };
+            (i, c)
+        }}; }
+
+        let num_fixed_columns = u1!();
+        let num_advice_columns = u1!();
+        let num_instance_columns = u1!();
+        let num_selectors = u1!();
+
+        let n_sm = u1!();
+        let mut selector_map = Vec::with_capacity(n_sm);
+        for _ in 0..n_sm { let (i,c) = any!(); if !matches!(c,Any::Fixed) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "!f")); } selector_map.push(Column{index:i,column_type:Fixed}); }
+
+        let n_g = u1!();
+        let mut gates = Vec::with_capacity(n_g);
+        for _ in 0..n_g { gates.push(Gate::read(reader)?); }
+
+        let n_aq = u1!();
+        let mut advice_queries = Vec::with_capacity(n_aq);
+        for _ in 0..n_aq { let (i,c)=any!(); if !matches!(c,Any::Advice) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"!a")); } advice_queries.push((Column{index:i,column_type:Advice}, r1!())); }
+
+        let n_naq = u1!();
+        let mut num_advice_queries = Vec::with_capacity(n_naq);
+        for _ in 0..n_naq { num_advice_queries.push(u1!()); }
+
+        let n_iq = u1!();
+        let mut instance_queries = Vec::with_capacity(n_iq);
+        for _ in 0..n_iq { let (i,c)=any!(); if !matches!(c,Any::Instance) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"!i")); } instance_queries.push((Column{index:i,column_type:Instance}, r1!())); }
+
+        let n_fq = u1!();
+        let mut fixed_queries = Vec::with_capacity(n_fq);
+        for _ in 0..n_fq { let (i,c)=any!(); if !matches!(c,Any::Fixed) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"!f")); } fixed_queries.push((Column{index:i,column_type:Fixed}, r1!())); }
+
+        let permutation = permutation::Argument::read(reader)?;
+
+        let n_lk = u1!();
+        let mut lookups = Vec::with_capacity(n_lk);
+        for _ in 0..n_lk { lookups.push(lookup::Argument::read(reader)?); }
+
+        let n_cn = u1!();
+        let mut constants = Vec::with_capacity(n_cn);
+        for _ in 0..n_cn { let (i,c)=any!(); if !matches!(c,Any::Fixed) { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"!f")); } constants.push(Column{index:i,column_type:Fixed}); }
+
+        reader.read_exact(&mut u8b)?;
+        let minimum_degree = if u8b[0] == 1 { Some(u1!()) } else { None };
+
+        Ok(ConstraintSystem {
+            num_fixed_columns, num_advice_columns, num_instance_columns, num_selectors,
+            selector_map, gates, advice_queries, num_advice_queries,
+            instance_queries, fixed_queries, permutation, lookups, constants, minimum_degree,
+        })
+    }
 }
 
 /// Represents the minimal parameters that determine a `ConstraintSystem`.

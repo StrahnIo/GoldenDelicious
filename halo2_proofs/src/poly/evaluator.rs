@@ -1,4 +1,6 @@
 use std::{
+    any::TypeId,
+    cell::RefCell,
     cmp, fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
@@ -119,7 +121,7 @@ pub(crate) fn new_evaluator<E: Fn() + Clone, F: Field, B: Basis>(context: E) -> 
     }
 }
 
-impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
+impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
     /// Registers the given polynomial for use in this evaluation context.
     ///
     /// This API treats each registered polynomial as unique, even if the same polynomial
@@ -154,7 +156,7 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
     {
         #[cfg(feature = "fuji")]
         if let Some(ref curve) = self.fuji_curve {
-            if fuji_helpers::fuji_available() {
+            if fuji_helpers::fuji_available() && TypeId::of::<B>() == TypeId::of::<ExtendedLagrangeCoeff>() {
                 return self.evaluate_fuji(ast, domain, *curve);
             }
         }
@@ -338,79 +340,103 @@ impl<E, F: Field, B: Basis> Evaluator<E, F, B> {
 
         let poly_len = self.polys.first().unwrap().len();
         let domain_n = 1 << domain.k();
-        let stride = poly_len / domain_n; // = 2^(extended_k - k) for Extended, =1 for Lagrange
+        let stride = poly_len / domain_n;
         let chunk_len = 410;
-        let num_chunks = (poly_len + chunk_len - 1) / chunk_len;
 
-        // Convert all polynomials to Montgomery form
-        let poly_table: Vec<fuji_crate::eval::PolyEntry> = self
-            .polys
-            .iter()
-            .map(|poly| fuji_crate::eval::PolyEntry {
-                data: poly
-                    .values
-                    .iter()
-                    .map(|f| {
-                        let mut buf = [0u8; 32];
-                        let repr = f.to_repr();
-                        let bytes: &[u8] = repr.as_ref();
-                        buf[..bytes.len()].copy_from_slice(bytes);
-                        let normal = fuji_crate::FujiField::from_bytes(&buf);
-                        normal.to_mont(curve)
-                    })
-                    .collect(),
-                domain_size: poly.values.len(),
-            })
-            .collect();
+        // Thread-local cache for the JIT-compiled bytecode.
+        // Built once per thread, reused across all evaluator instances on the same thread.
+        #[cfg(feature = "fuji")]
+        thread_local! {
+            static BC_CACHE: RefCell<Option<fuji_crate::eval::Bytecode>> = const { RefCell::new(None) };
+        }
 
-        // Compile AST → flat instructions + scalars
         let omega_native = domain.get_extended_omega();
-        let (code, scalars) = compile_ast(ast, stride as u32, omega_native, curve);
-        let max_depth = fuji_crate::eval::estimate_depth(&code);
-
-        // Execute chunks sequentially
-        let mut ctx = fuji_crate::eval::EvalContext {
-            chunk_len,
-            chunk_start: 0,
-            max_depth,
-            poly_table,
-            omega: {
-                let mut buf = [0u8; 32];
-                let repr = omega_native.to_repr();
-                let bytes: &[u8] = repr.as_ref();
-                buf[..bytes.len()].copy_from_slice(bytes);
-                fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
-            },
-            scalars,
+        let omega_mont = {
+            let mut buf = [0u8; 32];
+            let repr = omega_native.to_repr();
+            let bytes: &[u8] = repr.as_ref();
+            buf[..bytes.len()].copy_from_slice(bytes);
+            fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
         };
 
-        let mut scratch: Vec<Vec<fuji_crate::FujiField>> = (0..max_depth)
-            .map(|_| vec![fuji_crate::FujiField::zero(); chunk_len])
-            .collect();
-        let mut out_buf = vec![fuji_crate::FujiField::zero(); chunk_len];
-        let mut result_vals: Vec<F> = Vec::with_capacity(poly_len);
+        // 2. Build or load cached bytecode
+        BC_CACHE.with(|cache| {
+            let mut guard = cache.borrow_mut();
+            let cached = &mut *guard;
+            if cached.is_none() {
+                let (code, scalars, challenge_indices) =
+                compile_ast(ast, stride as u32, omega_native, curve);
+            let max_depth = fuji_crate::eval::estimate_depth(&code);
 
-        for chunk in 0..num_chunks {
-            let start = chunk * chunk_len;
-            let actual_len = std::cmp::min(chunk_len, poly_len - start);
-            ctx.chunk_start = start;
+            let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
+                let data = poly.values.iter().map(|f| {
+                    let mut buf = [0u8; 32];
+                    let repr = f.to_repr();
+                    let bytes: &[u8] = repr.as_ref();
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+                }).collect();
+                fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
+            }).collect();
 
-            for row in scratch.iter_mut() {
-                row.resize(actual_len, fuji_crate::FujiField::zero());
+            // Dump instruction listing when PERF_DEBUG and/or FUJI_DUMP_BC are set
+            if std::env::var("PERF_DEBUG").is_ok() && std::env::var("FUJI_DUMP_BC").is_ok() {
+                use std::io::Write;
+                let fname = format!("ast_dump_{}.txt", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+                if let Ok(mut f) = std::fs::File::create(&fname) {
+                    let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
+                        stride, chunk_len, poly_table.len(), scalars.len());
+                    for instr in &code {
+                        let _ = writeln!(f, "{}", fmt_instr(instr, &scalars));
+                    }
+                }
             }
-            out_buf.resize(actual_len, fuji_crate::FujiField::zero());
-
-            fuji_crate::eval::execute_chunk(&code, &ctx, &mut scratch, &mut out_buf);
-
-            // Convert results back from Montgomery to native field
-            for val in &out_buf[..actual_len] {
-                let norm = val.from_mont(curve);
-                let bytes = norm.to_bytes();
-                let mut repr = F::Repr::default();
-                let dst: &mut [u8] = repr.as_mut();
-                dst.copy_from_slice(&bytes);
-                result_vals.push(F::from_repr(repr).unwrap());
+            // Trace execution on chunk 0 when FUJI_TRACE_AST is set
+            if std::env::var("FUJI_TRACE_AST").is_ok() {
+                let trace_ctx = fuji_crate::eval::EvalContext {
+                    chunk_len, chunk_start: 0, max_depth,
+                    poly_table: poly_table.clone(),
+                    omega: omega_mont,
+                    scalars: scalars.clone(),
+                };
+                eprintln!(";; trace_execute  stride={}  chunk_len={}  poly_count={}  scalar_count={}  max_depth={}",
+                    stride, chunk_len, trace_ctx.poly_table.len(), trace_ctx.scalars.len(), trace_ctx.max_depth);
+                trace_execute(&code, &trace_ctx, curve);
             }
+            // Save .fuji file when FUJI_DUMP_BC is set
+            let bc_bytes = fuji_crate::eval::save_bytecode(
+                &code, &poly_table, &scalars, &omega_mont, curve, chunk_len, max_depth,
+            );
+            if std::env::var("FUJI_DUMP_BC").is_ok() {
+                let fname = format!("prove_{}.fuji", std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::File::create(&fname) {
+                    let _ = f.write_all(&bc_bytes);
+                }
+            }
+                *cached = Some(fuji_crate::eval::Bytecode::load(&bc_bytes, challenge_indices));
+            }
+        });
+
+        // 3. Execute via cached JIT
+        let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
+        let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
+        BC_CACHE.with(|cache| {
+            cache.borrow_mut().as_mut().unwrap()
+                .execute_all(&mut results_mont, 3);
+        });
+
+        // 5. Convert from Montgomery to native field
+        let mut result_vals = Vec::with_capacity(poly_len);
+        for val in &results_mont[..poly_len] {
+            let nv = val.from_mont(curve);
+            let bytes = nv.to_bytes();
+            let mut repr = F::Repr::default();
+            let dst: &mut [u8] = repr.as_mut();
+            dst.copy_from_slice(&bytes);
+            result_vals.push(F::from_repr(repr).unwrap());
         }
 
         Polynomial {
@@ -429,11 +455,13 @@ fn compile_ast<Ev, F: WithSmallOrderMulGroup<3>, B: Basis>(
     stride: u32,
     omega_native: F,
     curve: fuji_crate::FujiCurve,
-) -> (Vec<fuji_crate::eval::Instr>, Vec<fuji_crate::FujiField>) {
+) -> (Vec<fuji_crate::eval::Instr>, Vec<fuji_crate::FujiField>, Vec<usize>) {
     let mut code = Vec::new();
     let mut scalars = Vec::new();
-    compile_node(ast, &mut code, &mut scalars, stride, omega_native, curve);
-    (code, scalars)
+    let mut challenge_indices = Vec::new();
+    compile_node(ast, &mut code, &mut scalars, &mut challenge_indices, stride, omega_native, curve);
+    code.push(fuji_crate::eval::Instr::CopyToOut);
+    (code, scalars, challenge_indices)
 }
 
 #[cfg(feature = "fuji")]
@@ -458,6 +486,7 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
     ast: &Ast<E, F, B>,
     code: &mut Vec<fuji_crate::eval::Instr>,
     scalars: &mut Vec<fuji_crate::FujiField>,
+    challenge_indices: &mut Vec<usize>,
     stride: u32,
     omega_native: F,
     curve: fuji_crate::FujiCurve,
@@ -471,27 +500,28 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
             });
         }
         Ast::Add(a, b) => {
-            compile_node(b, code, scalars, stride, omega_native, curve);
-            compile_node(a, code, scalars, stride, omega_native, curve);
+            compile_node(b, code, scalars, challenge_indices, stride, omega_native, curve);
+            compile_node(a, code, scalars, challenge_indices, stride, omega_native, curve);
             code.push(fuji_crate::eval::Instr::Add);
         }
         Ast::Mul(AstMul(a, b)) => {
-            compile_node(b, code, scalars, stride, omega_native, curve);
-            compile_node(a, code, scalars, stride, omega_native, curve);
+            compile_node(b, code, scalars, challenge_indices, stride, omega_native, curve);
+            compile_node(a, code, scalars, challenge_indices, stride, omega_native, curve);
             code.push(fuji_crate::eval::Instr::Mul);
         }
         Ast::Scale(a, scalar) => {
-            compile_node(a, code, scalars, stride, omega_native, curve);
+            compile_node(a, code, scalars, challenge_indices, stride, omega_native, curve);
             let idx = push_scalar(scalars, *scalar, curve);
             code.push(fuji_crate::eval::Instr::Scale { scalar_idx: idx });
         }
         Ast::DistributePowers(terms, base) => {
             let mut terms = terms.iter();
             if let Some(first) = terms.next() {
-                compile_node(first, code, scalars, stride, omega_native, curve);
+                compile_node(first, code, scalars, challenge_indices, stride, omega_native, curve);
                 for term in terms {
-                    compile_node(term, code, scalars, stride, omega_native, curve);
+                    compile_node(term, code, scalars, challenge_indices, stride, omega_native, curve);
                     let idx = push_scalar(scalars, *base, curve);
+                    challenge_indices.push(idx as usize);
                     code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx });
                 }
             } else {
@@ -502,11 +532,198 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
         Ast::LinearTerm(scalar) => {
             let zeta_scaled = *scalar * F::ZETA;
             let idx = push_scalar(scalars, zeta_scaled, curve);
+            challenge_indices.push(idx as usize);
             code.push(fuji_crate::eval::Instr::LinearTerm { scalar_idx: idx });
         }
         Ast::ConstantTerm(scalar) => {
             let idx = push_scalar(scalars, *scalar, curve);
             code.push(fuji_crate::eval::Instr::Constant { scalar_idx: idx });
+        }
+    }
+}
+
+#[cfg(feature = "fuji")]
+fn fmt_instr(instr: &fuji_crate::eval::Instr, scalars: &[fuji_crate::FujiField]) -> String {
+    match instr {
+        fuji_crate::eval::Instr::LoadRotated { col, rotation } => {
+            format!("LOAD_ROTATED col={} rot={}", col, rotation)
+        }
+        fuji_crate::eval::Instr::Add => "ADD".into(),
+        fuji_crate::eval::Instr::Sub => "SUB".into(),
+        fuji_crate::eval::Instr::Mul => "MUL".into(),
+        fuji_crate::eval::Instr::Scale { scalar_idx } => {
+            let s = &scalars[*scalar_idx as usize];
+            format!("SCALE scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
+        }
+        fuji_crate::eval::Instr::Fma { scalar_idx } => {
+            let s = &scalars[*scalar_idx as usize];
+            format!("FMA scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
+        }
+        fuji_crate::eval::Instr::LinearTerm { scalar_idx } => {
+            let s = &scalars[*scalar_idx as usize];
+            format!("LINEAR_TERM scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
+        }
+        fuji_crate::eval::Instr::Constant { scalar_idx } => {
+            let s = &scalars[*scalar_idx as usize];
+            format!("CONSTANT scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
+        }
+        fuji_crate::eval::Instr::Negate => "NEGATE".into(),
+        fuji_crate::eval::Instr::CopyToOut => "COPY_TO_OUT".into(),
+        fuji_crate::eval::Instr::Dup => "DUP".into(),
+    }
+}
+
+/// Trace-execute the compiled instruction sequence on chunk 0, printing every
+/// operation together with the first few field element values it produces.
+/// Triggered by `FUJI_TRACE_AST=1`.
+#[cfg(feature = "fuji")]
+fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalContext, curve: fuji_crate::FujiCurve) {
+    use fuji_crate::batch_field;
+    let n = ctx.chunk_len;
+    let n_rows = ctx.max_depth.max(3); // at least 3 for temp row
+    let mut scratch = vec![vec![fuji_crate::FujiField::zero(); n]; n_rows];
+    let mut sp = 0usize;
+
+    fn dump(v: &[fuji_crate::FujiField], sp: usize) {
+        let show = v.len().min(3);
+        eprint!("[");
+        for (i, f) in v.iter().take(show).enumerate() {
+            if i > 0 { eprint!(", "); }
+            let b = f.to_bytes();
+            eprint!("0x{:02x}{:02x}{:02x}..", b[0], b[1], b[2]);
+        }
+        if v.len() > 3 { eprint!(", ...({})", v.len()); }
+        eprintln!("]  (sp={})", sp);
+    }
+
+    fn dump_scalar(s: &fuji_crate::FujiField) {
+        let b = s.to_bytes();
+        eprint!("0x{:02x}{:02x}{:02x}..", b[0], b[1], b[2]);
+    }
+
+    for (ip, instr) in code.iter().enumerate() {
+        eprint!("[{:4}] ", ip);
+        match instr {
+            fuji_crate::eval::Instr::LoadRotated { col, rotation } => {
+                let p = &ctx.poly_table[*col as usize];
+                let ds = p.domain_size;
+                let row = &mut scratch[sp];
+                for i in 0..n {
+                    let idx = if *rotation >= 0 {
+                        (ctx.chunk_start + i + *rotation as usize) % ds
+                    } else {
+                        let abs = (-rotation) as usize;
+                        if ctx.chunk_start + i >= abs {
+                            ctx.chunk_start + i - abs
+                        } else {
+                            ds - (abs - (ctx.chunk_start + i)) % ds
+                        }
+                    };
+                    row[i] = p.data[idx % ds];
+                }
+                eprintln!("LOAD_ROTATED col={} rot={}", col, rotation);
+                eprint!("       → "); dump(row, sp);
+                sp += 1;
+            }
+            fuji_crate::eval::Instr::Add => {
+                let a = sp - 2; let b = sp - 1;
+                let tmp_a = scratch[a].clone();
+                let tmp_b = scratch[b].clone();
+                batch_field::add(&tmp_a, &tmp_b, &mut scratch[a], curve);
+                eprintln!("ADD");
+                eprint!("       → "); dump(&scratch[a], sp - 1);
+                sp -= 1;
+            }
+            fuji_crate::eval::Instr::Sub => {
+                let a = sp - 2; let b = sp - 1;
+                let tmp_a = scratch[a].clone();
+                let tmp_b = scratch[b].clone();
+                batch_field::sub(&tmp_a, &tmp_b, &mut scratch[a], curve);
+                eprintln!("SUB");
+                eprint!("       → "); dump(&scratch[a], sp - 1);
+                sp -= 1;
+            }
+            fuji_crate::eval::Instr::Mul => {
+                let a = sp - 2; let b = sp - 1;
+                let tmp_a = scratch[a].clone();
+                let tmp_b = scratch[b].clone();
+                batch_field::mul(&tmp_a, &tmp_b, &mut scratch[a], curve);
+                eprintln!("MUL");
+                eprint!("       → "); dump(&scratch[a], sp - 1);
+                sp -= 1;
+            }
+            fuji_crate::eval::Instr::Scale { scalar_idx } => {
+                let s = &ctx.scalars[*scalar_idx as usize];
+                let tmp = scratch[sp - 1].clone();
+                batch_field::scale(&tmp, s, &mut scratch[sp - 1], curve);
+                eprint!("SCALE scalar_idx={} val=", scalar_idx);
+                dump_scalar(s);
+                eprintln!();
+                eprint!("       → "); dump(&scratch[sp - 1], sp);
+            }
+            fuji_crate::eval::Instr::Fma { scalar_idx } => {
+                let s = &ctx.scalars[*scalar_idx as usize];
+                let a = sp - 2; let term = sp - 1;
+                let tmp_a = scratch[a].clone();
+                let tmp_term = scratch[term].clone();
+                batch_field::scale(&tmp_a, s, &mut scratch[a], curve);
+                let tmp_a2 = scratch[a].clone();
+                batch_field::add(&tmp_a2, &tmp_term, &mut scratch[a], curve);
+                eprint!("FMA scalar_idx={} val=", scalar_idx);
+                dump_scalar(s);
+                eprintln!();
+                eprint!("       → "); dump(&scratch[a], sp - 1);
+                sp -= 1;
+            }
+            fuji_crate::eval::Instr::LinearTerm { scalar_idx } => {
+                let s = &ctx.scalars[*scalar_idx as usize];
+                let row = &mut scratch[sp];
+                let om = ctx.omega;
+                // pow = omega^chunk_start
+                let mut pow = om;
+                for _ in 0..ctx.chunk_start {
+                    batch_field::scale(&[pow], &om, &mut [pow], curve);
+                }
+                for i in 0..n {
+                    if i == 0 {
+                        batch_field::scale(&[*s], &pow, &mut [row[i]], curve);
+                    } else {
+                        batch_field::mul(&[row[i - 1]], &[om], &mut [row[i]], curve);
+                    }
+                }
+                eprint!("LINEAR_TERM scalar_idx={} val=", scalar_idx);
+                dump_scalar(s);
+                eprintln!();
+                eprint!("       → "); dump(row, sp);
+                sp += 1;
+            }
+            fuji_crate::eval::Instr::Constant { scalar_idx } => {
+                let s = &ctx.scalars[*scalar_idx as usize];
+                scratch[sp].fill(*s);
+                eprint!("CONSTANT scalar_idx={} val=", scalar_idx);
+                dump_scalar(s);
+                eprintln!();
+                eprint!("       → "); dump(&scratch[sp], sp);
+                sp += 1;
+            }
+            fuji_crate::eval::Instr::Negate => {
+                let r = sp - 1;
+                let zeros = vec![fuji_crate::FujiField::zero(); n];
+                let tmp_r = scratch[r].clone();
+                batch_field::sub(&zeros, &tmp_r, &mut scratch[r], curve);
+                eprintln!("NEGATE");
+                eprint!("       → "); dump(&scratch[r], sp);
+            }
+            fuji_crate::eval::Instr::CopyToOut => {
+                eprintln!("COPY_TO_OUT  (out = scratch[0])");
+                eprint!("       → "); dump(&scratch[0], 0);
+            }
+            fuji_crate::eval::Instr::Dup => {
+                let src = scratch[sp - 1].clone();
+                scratch[sp].copy_from_slice(&src);
+                eprintln!("DUP");
+                sp += 1;
+            }
         }
     }
 }
