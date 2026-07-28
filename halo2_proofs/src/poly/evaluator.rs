@@ -421,12 +421,18 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         });
 
         // 3. Execute via cached JIT
+        let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() {
+            Some(std::time::Instant::now())
+        } else { None };
         let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
         BC_CACHE.with(|cache| {
             cache.borrow_mut().as_mut().unwrap()
                 .execute_all(&mut results_mont, 3);
         });
+        if let Some(ref t) = _jit_timer {
+            eprintln!("[perf]   jit_execute_all: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0);
+        }
 
         // 5. Convert from Montgomery to native field
         let mut result_vals = Vec::with_capacity(poly_len);
