@@ -422,13 +422,28 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         // 3. Fresh scalars per prove (challenge values differ each round)
         let (_, fresh_scalars, _) = compile_ast(ast, stride as u32, omega_native, curve);
 
-        // 4. Execute via cached Bytecode with fresh scalars
+        // 4. Execute via one of three dispatch paths (selected by FUJI_DEBUG_PATH env var)
+        let debug_path = std::env::var("FUJI_DEBUG_PATH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
         let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
-        BC_CACHE.with(|cache| {
-            cache.borrow_mut().as_mut().unwrap().0
-                .execute_all(&mut results_mont, 0, Some(&fresh_scalars));
-        });
+        match debug_path {
+            1 => {
+                // Path 1: Bytecode (current, uses fuji_bytecode_read + fuji_jit_compile_from_bc)
+                BC_CACHE.with(|cache| {
+                    cache.borrow_mut().as_mut().unwrap().0
+                        .execute_all(&mut results_mont, 0, Some(&fresh_scalars));
+                });
+            }
+            2 => {
+                // Path 2: JitEval (fuji_jit_compile_from_buf + fuji_jit_eval_cached)
+                let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().1.clone());
+                let n_scalars = fresh_scalars.len();
+                let jit = fuji_crate::eval::JitEval::compile(&bc_bytes, n_scalars, n_padded)
+                    .expect("JitEval::compile");
+                jit.eval(&fresh_scalars, &mut results_mont).expect("JitEval::eval");
+            }
+            _ => panic!("FUJI_DEBUG_PATH must be 1 or 2"),
+        }
         if let Some(ref t) = _jit_timer { eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
         // 4. Convert from Montgomery to native field
