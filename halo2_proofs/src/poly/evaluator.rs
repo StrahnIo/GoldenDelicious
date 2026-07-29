@@ -427,7 +427,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
         BC_CACHE.with(|cache| {
             cache.borrow_mut().as_mut().unwrap().0
-                .execute_all(&mut results_mont, 3, Some(&fresh_scalars));
+                .execute_all(&mut results_mont, 0, Some(&fresh_scalars));
         });
         if let Some(ref t) = _jit_timer { eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
