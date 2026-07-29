@@ -395,8 +395,8 @@ pub fn create_proof<
     let mut coset_evaluator = poly::new_evaluator(|| {});
     #[cfg(feature = "fuji")]
     {
-        coset_evaluator.enable_fuji(params.fuji_curve);
-        value_evaluator.enable_fuji(params.fuji_curve);
+        coset_evaluator.enable_fuji(params.field_curve);
+        value_evaluator.enable_fuji(params.field_curve);
     }
 
     // Register fixed cosets with the polynomial evaluator.

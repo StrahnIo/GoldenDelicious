@@ -39,6 +39,10 @@ pub struct Params<C: CurveAffine> {
     pub(crate) w_mont: fuji::FujiAffine,
     #[cfg(feature = "fuji")]
     pub(crate) fuji_curve: fuji::FujiCurve,
+    /// Curve for field arithmetic (from C::Scalar). Differs from fuji_curve for
+    /// Pasta curves where C::Base and C::Scalar use different moduli.
+    #[cfg(feature = "fuji")]
+    pub(crate) field_curve: fuji::FujiCurve,
 }
 
 impl<C: CurveAffine> std::fmt::Debug for Params<C> {
@@ -142,20 +146,22 @@ impl<C: CurveAffine> Params<C> {
         let u = hasher(&[2]).to_affine();
 
         #[cfg(feature = "fuji")]
-        let (mont_cache, fuji_curve) = {
-            let curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
+        let (g_mont, g_lagrange_mont, w_mont, fuji_curve, field_curve) = {
+            let msm_curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
                 fuji::FujiCurve::Pallas
             } else {
                 fuji::FujiCurve::Vesta
             };
-            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
-            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
-            let w_mont = curve_to_fuji_mont(&w, curve);
-            ((g_mont, g_lagrange_mont, w_mont), curve)
+            let fld_curve = if TypeId::of::<C::Scalar>() == TypeId::of::<pasta_curves::Fq>() {
+                fuji::FujiCurve::Vesta
+            } else {
+                fuji::FujiCurve::Pallas
+            };
+            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, msm_curve)).collect();
+            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, msm_curve)).collect();
+            let w_mont = curve_to_fuji_mont(&w, msm_curve);
+            (g_mont, g_lagrange_mont, w_mont, msm_curve, fld_curve)
         };
-
-        #[cfg(feature = "fuji")]
-        let (g_mont, g_lagrange_mont, w_mont) = mont_cache;
 
         Params {
             k,
@@ -172,6 +178,8 @@ impl<C: CurveAffine> Params<C> {
             w_mont,
             #[cfg(feature = "fuji")]
             fuji_curve,
+            #[cfg(feature = "fuji")]
+            field_curve,
         }
     }
 
@@ -404,20 +412,22 @@ impl<C: CurveAffine> Params<C> {
         let u = C::read(reader)?;
 
         #[cfg(feature = "fuji")]
-        let (mont_cache, fuji_curve) = {
-            let curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
+        let (g_mont, g_lagrange_mont, w_mont, fuji_curve, field_curve) = {
+            let msm_curve = if TypeId::of::<C::Base>() == TypeId::of::<pasta_curves::Fp>() {
                 fuji::FujiCurve::Pallas
             } else {
                 fuji::FujiCurve::Vesta
             };
-            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
-            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, curve)).collect();
-            let w_mont = curve_to_fuji_mont(&w, curve);
-            ((g_mont, g_lagrange_mont, w_mont), curve)
+            let fld_curve = if TypeId::of::<C::Scalar>() == TypeId::of::<pasta_curves::Fq>() {
+                fuji::FujiCurve::Vesta
+            } else {
+                fuji::FujiCurve::Pallas
+            };
+            let g_mont: Vec<_> = g.iter().map(|b| curve_to_fuji_mont(b, msm_curve)).collect();
+            let g_lagrange_mont: Vec<_> = g_lagrange.iter().map(|b| curve_to_fuji_mont(b, msm_curve)).collect();
+            let w_mont = curve_to_fuji_mont(&w, msm_curve);
+            (g_mont, g_lagrange_mont, w_mont, msm_curve, fld_curve)
         };
-
-        #[cfg(feature = "fuji")]
-        let (g_mont, g_lagrange_mont, w_mont) = mont_cache;
 
         Ok(Params {
             k,
@@ -434,6 +444,8 @@ impl<C: CurveAffine> Params<C> {
             w_mont,
             #[cfg(feature = "fuji")]
             fuji_curve,
+            #[cfg(feature = "fuji")]
+            field_curve,
         })
     }
 

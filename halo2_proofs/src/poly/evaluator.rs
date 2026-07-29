@@ -1,12 +1,15 @@
 use std::{
     any::TypeId,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     cmp, fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
     ops::{Add, Mul, MulAssign, Neg, Sub},
     sync::Arc,
 };
+
+#[cfg(feature = "fuji")]
+thread_local! { static SKIP_FUJI: Cell<bool> = const { Cell::new(false) }; }
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ff::WithSmallOrderMulGroup;
@@ -157,7 +160,9 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         #[cfg(feature = "fuji")]
         if let Some(ref curve) = self.fuji_curve {
             if fuji_helpers::fuji_available() && TypeId::of::<B>() == TypeId::of::<ExtendedLagrangeCoeff>() {
-                return self.evaluate_fuji(ast, domain, *curve);
+                if !SKIP_FUJI.with(|f| f.get()) {
+                    return self.evaluate_fuji(ast, domain, *curve);
+                }
             }
         }
 
@@ -334,6 +339,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         curve: fuji_crate::FujiCurve,
     ) -> Polynomial<F, B>
     where
+        E: Copy + Send + Sync,
         F: WithSmallOrderMulGroup<3> + ff::PrimeField,
         B: BasisOps,
     {
@@ -346,7 +352,8 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         // Thread-local Bytecode cache — compiled once per thread, persisted to disk.
         #[cfg(feature = "fuji")]
         thread_local! {
-            static BC_CACHE: RefCell<Option<fuji_crate::eval::Bytecode>> = const { RefCell::new(None) };
+            static BC_CACHE: RefCell<Option<(fuji_crate::eval::Bytecode, Vec<u8>)>>
+                = const { RefCell::new(None) };
         }
 
         let omega_native = domain.get_extended_omega();
@@ -358,7 +365,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
         };
 
-        // 2. Compile Bytecode once per thread (cached in thread_local — ~10ms, paid once)
+        // 2. Compile Bytecode once per thread. .fiji saved when FUJI_DUMP_BC is set.
         let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
         BC_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
@@ -380,16 +387,15 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                 let bc_bytes = fuji_crate::eval::save_bytecode(
                     &code, &poly_table, &scalars, &omega_mont, curve, chunk_len, max_depth,
                 );
-                // Save to disk when FUJI_DUMP_BC is set
                 if std::env::var("FUJI_DUMP_BC").is_ok() {
                     let fname = format!("prove_{}.fuji", std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
                     let _ = std::fs::write(&fname, &bc_bytes);
                 }
                 if std::env::var("PERF_DEBUG").is_ok() {
-                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-                    let fname = format!("ast_dump_{}.txt", ts);
                     use std::io::Write;
+                    let fname = format!("ast_dump_{}.txt", std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
                     if let Ok(mut f) = std::fs::File::create(&fname) {
                         let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
                             stride, chunk_len, poly_table.len(), scalars.len());
@@ -407,15 +413,21 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                         stride, chunk_len, trace_ctx.poly_table.len(), trace_ctx.scalars.len(), trace_ctx.max_depth);
                     trace_execute(&code, &trace_ctx, curve);
                 }
-                *guard = Some(fuji_crate::eval::Bytecode::load(&bc_bytes, ci));
+                let bc = fuji_crate::eval::Bytecode::load(&bc_bytes, ci);
+                eprintln!("[bc_cache] stored {} bytes", bc_bytes.len());
+                *guard = Some((bc, bc_bytes));
             }
         });
 
-        // 3. Execute via cached Bytecode
+        // 3. Fresh scalars per prove (challenge values differ each round)
+        let (_, fresh_scalars, _) = compile_ast(ast, stride as u32, omega_native, curve);
+
+        // 4. Execute via cached Bytecode with fresh scalars
         let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
         BC_CACHE.with(|cache| {
-            cache.borrow_mut().as_mut().unwrap().execute_all(&mut results_mont, 3);
+            cache.borrow_mut().as_mut().unwrap().0
+                .execute_all(&mut results_mont, 3, Some(&fresh_scalars));
         });
         if let Some(ref t) = _jit_timer { eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
@@ -428,6 +440,42 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             let dst: &mut [u8] = repr.as_mut();
             dst.copy_from_slice(&bytes);
             result_vals.push(F::from_repr(repr).unwrap());
+        }
+
+        // 5. FUJI_DUMP_REF: save .fuji + .scalars.bin + .ref.bin atomically (same timestamp).
+        if std::env::var("FUJI_DUMP_REF").is_ok() {
+            use std::io::Write;
+            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let base = format!("prove_{}", ts);
+            // .fuji from the cached serialized bytes
+            let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().1.clone());
+            eprintln!("[FUJI_DUMP_REF] bc_bytes size = {}, writing to {}", bc_bytes.len(), base);
+            match std::fs::write(&base, &bc_bytes) {
+                Ok(_) => eprintln!("[FUJI_DUMP_REF] write OK"),
+                Err(e) => eprintln!("[FUJI_DUMP_REF] write FAILED: {}", e),
+            }
+            // .scalars.bin
+            let sc_bytes: Vec<u8> = fresh_scalars.iter().flat_map(|f| f.to_bytes().to_vec()).collect();
+            let _ = std::fs::write(format!("{}.scalars.bin", base), &sc_bytes);
+            // .ref.bin via recursive evaluator
+            SKIP_FUJI.with(|f| f.set(true));
+            let ref_result = self.evaluate(ast, domain);
+            SKIP_FUJI.with(|f| f.set(false));
+            let ref_bytes: Vec<u8> = ref_result.values.iter().flat_map(|f| f.to_repr().as_ref().to_vec()).collect();
+            let _ = std::fs::write(format!("{}.ref.bin", base), &ref_bytes);
+            // First-diff diagnostic
+            let chunk_len = 410usize;
+            for ch in 0..(poly_len / chunk_len).min(3) {
+                let base = ch * chunk_len;
+                for i in base..base + chunk_len.min(5) {
+                    if result_vals[i] != ref_result.values[i] {
+                        eprintln!("[FDIFF] chunk {} elem {}: jit=0x{:02x?} ref=0x{:02x?}", ch, i,
+                            result_vals[i].to_repr().as_ref(), ref_result.values[i].to_repr().as_ref());
+                        break;
+                    }
+                }
+            }
+            eprintln!("[FUJI_DUMP_REF] saved {}.fuji .scalars.bin .ref.bin", base);
         }
 
         Polynomial {
