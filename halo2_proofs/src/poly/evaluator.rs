@@ -343,8 +343,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let stride = poly_len / domain_n;
         let chunk_len = 410;
 
-        // Thread-local cache for the JIT-compiled bytecode.
-        // Built once per thread, reused across all evaluator instances on the same thread.
+        // Thread-local cache for the JIT-compiled bytecode (Bytecode + dispatch_apply_f).
         #[cfg(feature = "fuji")]
         thread_local! {
             static BC_CACHE: RefCell<Option<fuji_crate::eval::Bytecode>> = const { RefCell::new(None) };
@@ -360,81 +359,80 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         };
 
         // 2. Build or load cached bytecode
+        let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
         BC_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
-            let cached = &mut *guard;
-            if cached.is_none() {
+            if guard.is_none() {
                 let (code, scalars, challenge_indices) =
-                compile_ast(ast, stride as u32, omega_native, curve);
-            let max_depth = fuji_crate::eval::estimate_depth(&code);
-
-            let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
-                let data = poly.values.iter().map(|f| {
-                    let mut buf = [0u8; 32];
-                    let repr = f.to_repr();
-                    let bytes: &[u8] = repr.as_ref();
-                    buf[..bytes.len()].copy_from_slice(bytes);
-                    fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+                    compile_ast(ast, stride as u32, omega_native, curve);
+                let max_depth = fuji_crate::eval::estimate_depth(&code);
+                let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
+                    let data = poly.values.iter().map(|f| {
+                        let mut buf = [0u8; 32];
+                        let repr = f.to_repr();
+                        let bytes: &[u8] = repr.as_ref();
+                        buf[..bytes.len()].copy_from_slice(bytes);
+                        fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+                    }).collect();
+                    fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
                 }).collect();
-                fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
-            }).collect();
 
-            // Dump instruction listing when PERF_DEBUG and/or FUJI_DUMP_BC are set
-            if std::env::var("PERF_DEBUG").is_ok() && std::env::var("FUJI_DUMP_BC").is_ok() {
-                use std::io::Write;
-                let fname = format!("ast_dump_{}.txt", std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-                if let Ok(mut f) = std::fs::File::create(&fname) {
-                    let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
-                        stride, chunk_len, poly_table.len(), scalars.len());
-                    for instr in &code {
-                        let _ = writeln!(f, "{}", fmt_instr(instr, &scalars));
+                let bc_bytes = fuji_crate::eval::save_bytecode(
+                    &code, &poly_table, &scalars, &omega_mont, curve, chunk_len, max_depth,
+                );
+
+                // Dump for debugging
+                if std::env::var("PERF_DEBUG").is_ok() || std::env::var("FUJI_DUMP_BC").is_ok() {
+                    use std::io::Write;
+                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+                    if std::env::var("FUJI_DUMP_BC").is_ok() {
+                        let fname = format!("prove_{}.fuji", ts);
+                        if let Ok(mut f) = std::fs::File::create(&fname) {
+                            let _ = f.write_all(&bc_bytes);
+                        }
+                    }
+                    if std::env::var("PERF_DEBUG").is_ok() {
+                        let fname = format!("ast_dump_{}.txt", ts);
+                        if let Ok(mut f) = std::fs::File::create(&fname) {
+                            let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
+                                stride, chunk_len, poly_table.len(), scalars.len());
+                            for instr in &code {
+                                let _ = writeln!(f, "{}", fmt_instr(instr, &scalars));
+                            }
+                        }
                     }
                 }
-            }
-            // Trace execution on chunk 0 when FUJI_TRACE_AST is set
-            if std::env::var("FUJI_TRACE_AST").is_ok() {
-                let trace_ctx = fuji_crate::eval::EvalContext {
-                    chunk_len, chunk_start: 0, max_depth,
-                    poly_table: poly_table.clone(),
-                    omega: omega_mont,
-                    scalars: scalars.clone(),
-                };
-                eprintln!(";; trace_execute  stride={}  chunk_len={}  poly_count={}  scalar_count={}  max_depth={}",
-                    stride, chunk_len, trace_ctx.poly_table.len(), trace_ctx.scalars.len(), trace_ctx.max_depth);
-                trace_execute(&code, &trace_ctx, curve);
-            }
-            // Save .fuji file when FUJI_DUMP_BC is set
-            let bc_bytes = fuji_crate::eval::save_bytecode(
-                &code, &poly_table, &scalars, &omega_mont, curve, chunk_len, max_depth,
-            );
-            if std::env::var("FUJI_DUMP_BC").is_ok() {
-                let fname = format!("prove_{}.fuji", std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::File::create(&fname) {
-                    let _ = f.write_all(&bc_bytes);
+                if std::env::var("FUJI_TRACE_AST").is_ok() {
+                    let trace_ctx = fuji_crate::eval::EvalContext {
+                        chunk_len, chunk_start: 0, max_depth,
+                        poly_table: poly_table.clone(),
+                        omega: omega_mont,
+                        scalars: scalars.clone(),
+                    };
+                    eprintln!(";; trace_execute  stride={}  chunk_len={}  poly_count={}  scalar_count={}  max_depth={}",
+                        stride, chunk_len, trace_ctx.poly_table.len(), trace_ctx.scalars.len(), trace_ctx.max_depth);
+                    trace_execute(&code, &trace_ctx, curve);
                 }
-            }
-                *cached = Some(fuji_crate::eval::Bytecode::load(&bc_bytes, challenge_indices));
+
+                let bc = fuji_crate::eval::Bytecode::load(&bc_bytes, challenge_indices);
+                *guard = Some(bc);
             }
         });
 
-        // 3. Execute via cached JIT
+        // 3. Execute via cached bytecode (dispatch_apply_f inside Bytecode::execute_all)
         let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() {
             Some(std::time::Instant::now())
         } else { None };
-        let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
         BC_CACHE.with(|cache| {
             cache.borrow_mut().as_mut().unwrap()
                 .execute_all(&mut results_mont, 3);
         });
         if let Some(ref t) = _jit_timer {
-            eprintln!("[perf]   jit_execute_all: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0);
+            eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0);
         }
 
-        // 5. Convert from Montgomery to native field
+        // 4. Convert from Montgomery to native field
         let mut result_vals = Vec::with_capacity(poly_len);
         for val in &results_mont[..poly_len] {
             let nv = val.from_mont(curve);
