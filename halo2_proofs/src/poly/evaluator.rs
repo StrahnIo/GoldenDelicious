@@ -510,6 +510,28 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             SKIP_FUJI.with(|f| f.set(false));
             let ref_bytes: Vec<u8> = ref_result.values.iter().flat_map(|f| f.to_repr().as_ref().to_vec()).collect();
             let _ = std::fs::write(format!("{}.ref.bin", base), &ref_bytes);
+            // Diagnostic: compare JIT out[0] against poly column 32 (first LOAD_ROTATED)
+            if let Some(ref first_jit) = result_vals.get(0) {
+                eprintln!("[FDIAG] JIT out[0] (col=32 rot=0 load)  = 0x{:02x?}",
+                    first_jit.to_repr().as_ref());
+            }
+            if let Some(ref first_ref) = ref_result.values.get(0) {
+                eprintln!("[FDIAG] REF out[0] (correct result)     = 0x{:02x?}",
+                    first_ref.to_repr().as_ref());
+            }
+            // Show what poly column 32's first element should be (in Mont form)
+            if self.polys.len() > 32 {
+                let poly32 = &self.polys[32];
+                if let Some(f0) = poly32.values.first() {
+                    let mut buf = [0u8; 32];
+                    let repr = f0.to_repr();
+                    let bytes: &[u8] = repr.as_ref();
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    let mont = fuji_crate::FujiField::from_bytes(&buf).to_mont(curve);
+                    eprintln!("[FDIAG] poly col 32 Mont[0] (expected load) = 0x{:02x?}", mont.to_bytes());
+                    eprintln!("[FDIAG] poly col 32 native[0]               = 0x{:02x?}", repr.as_ref());
+                }
+            }
             // First-diff diagnostic
             let chunk_len = 410usize;
             for ch in 0..(poly_len / chunk_len).min(3) {
