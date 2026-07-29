@@ -343,10 +343,11 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let stride = poly_len / domain_n;
         let chunk_len = 410;
 
-        // Thread-local cache for the JIT-compiled bytecode (Bytecode + dispatch_apply_f).
+        // Thread-local JitEval cache — compiled once per thread.
         #[cfg(feature = "fuji")]
         thread_local! {
-            static BC_CACHE: RefCell<Option<fuji_crate::eval::Bytecode>> = const { RefCell::new(None) };
+            static JIT_CACHE: RefCell<Option<(fuji_crate::eval::JitEval, Vec<fuji_crate::FujiField>)>>
+                = const { RefCell::new(None) };
         }
 
         let omega_native = domain.get_extended_omega();
@@ -358,12 +359,12 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
         };
 
-        // 2. Build or load cached bytecode
+        // 2. Build or load cached JitEval
         let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
-        BC_CACHE.with(|cache| {
+        JIT_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
             if guard.is_none() {
-                let (code, scalars, challenge_indices) =
+                let (code, scalars, _ci) =
                     compile_ast(ast, stride as u32, omega_native, curve);
                 let max_depth = fuji_crate::eval::estimate_depth(&code);
                 let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
@@ -387,9 +388,9 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
                     if std::env::var("FUJI_DUMP_BC").is_ok() {
                         let fname = format!("prove_{}.fuji", ts);
-                        if let Ok(mut f) = std::fs::File::create(&fname) {
-                            let _ = f.write_all(&bc_bytes);
-                        }
+                        let _ = (|| -> std::io::Result<()> {
+                            let mut f = std::fs::File::create(&fname)?; f.write_all(&bc_bytes)
+                        })();
                     }
                     if std::env::var("PERF_DEBUG").is_ok() {
                         let fname = format!("ast_dump_{}.txt", ts);
@@ -414,19 +415,21 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                     trace_execute(&code, &trace_ctx, curve);
                 }
 
-                let bc = fuji_crate::eval::Bytecode::load(&bc_bytes, challenge_indices);
-                *guard = Some(bc);
+                let jit = fuji_crate::eval::JitEval::compile(&bc_bytes, scalars.len(), n_padded)
+                    .expect("JitEval::compile failed");
+                *guard = Some((jit, scalars));
             }
         });
 
-        // 3. Execute via cached bytecode (dispatch_apply_f inside Bytecode::execute_all)
+        // 3. Eval via cached JitEval — one FFI call, all dispatch inside C
         let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() {
             Some(std::time::Instant::now())
         } else { None };
         let mut results_mont = vec![fuji_crate::FujiField::zero(); n_padded];
-        BC_CACHE.with(|cache| {
-            cache.borrow_mut().as_mut().unwrap()
-                .execute_all(&mut results_mont, 3);
+        JIT_CACHE.with(|cache| {
+            let guard = cache.borrow();
+            let (ref jit, ref scalars) = *guard.as_ref().unwrap();
+            jit.eval(scalars, &mut results_mont).expect("JitEval eval failed");
         });
         if let Some(ref t) = _jit_timer {
             eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0);
