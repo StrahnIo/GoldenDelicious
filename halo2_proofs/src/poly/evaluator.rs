@@ -343,8 +343,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let stride = poly_len / domain_n;
         let chunk_len = 410;
 
-        // Thread-local Bytecode cache — compiled once per thread. dispatch_apply_f inside.
-        // JitEval is slower on current library (938ms vs 765ms Bytecode).
+        // Thread-local Bytecode cache — compiled once per thread, persisted to disk.
         #[cfg(feature = "fuji")]
         thread_local! {
             static BC_CACHE: RefCell<Option<fuji_crate::eval::Bytecode>> = const { RefCell::new(None) };
@@ -359,7 +358,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
         };
 
-        // 2. Build or load cached Bytecode
+        // 2. Compile Bytecode once per thread (cached in thread_local — ~10ms, paid once)
         let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
         BC_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
@@ -381,21 +380,21 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                 let bc_bytes = fuji_crate::eval::save_bytecode(
                     &code, &poly_table, &scalars, &omega_mont, curve, chunk_len, max_depth,
                 );
-                if std::env::var("PERF_DEBUG").is_ok() || std::env::var("FUJI_DUMP_BC").is_ok() {
-                    use std::io::Write;
+                // Save to disk when FUJI_DUMP_BC is set
+                if std::env::var("FUJI_DUMP_BC").is_ok() {
+                    let fname = format!("prove_{}.fuji", std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+                    let _ = std::fs::write(&fname, &bc_bytes);
+                }
+                if std::env::var("PERF_DEBUG").is_ok() {
                     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-                    if std::env::var("FUJI_DUMP_BC").is_ok() {
-                        let fname = format!("prove_{}.fuji", ts);
-                        let _ = (|| -> std::io::Result<()> { let mut f = std::fs::File::create(&fname)?; f.write_all(&bc_bytes) })();
-                    }
-                    if std::env::var("PERF_DEBUG").is_ok() {
-                        let fname = format!("ast_dump_{}.txt", ts);
-                        if let Ok(mut f) = std::fs::File::create(&fname) {
-                            let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
-                                stride, chunk_len, poly_table.len(), scalars.len());
-                            for instr in &code {
-                                let _ = writeln!(f, "{}", fmt_instr(instr, &scalars));
-                            }
+                    let fname = format!("ast_dump_{}.txt", ts);
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::File::create(&fname) {
+                        let _ = writeln!(f, ";; ast_dump  stride={}  chunk_len={}  poly_count={}  scalar_count={}",
+                            stride, chunk_len, poly_table.len(), scalars.len());
+                        for instr in &code {
+                            let _ = writeln!(f, "{}", fmt_instr(instr, &scalars));
                         }
                     }
                 }
