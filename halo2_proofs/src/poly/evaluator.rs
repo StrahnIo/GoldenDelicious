@@ -442,7 +442,39 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                     .expect("JitEval::compile");
                 jit.eval(&fresh_scalars, &mut results_mont).expect("JitEval::eval");
             }
-            _ => panic!("FUJI_DEBUG_PATH must be 1 or 2"),
+            3 => {
+                // Path 3: Direct JIT (fuji_jit_compile directly, no bytecode serialization)
+                let (code, scalars, _ci) = compile_ast(ast, stride as u32, omega_native, curve);
+                let md = fuji_crate::eval::estimate_depth(&code);
+                let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
+                    let data = poly.values.iter().map(|f| {
+                        let mut buf = [0u8; 32];
+                        let repr = f.to_repr();
+                        let bytes: &[u8] = repr.as_ref();
+                        buf[..bytes.len()].copy_from_slice(bytes);
+                        fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+                    }).collect();
+                    fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
+                }).collect();
+                let jit = fuji_crate::eval::build_jit(&code, &poly_table, chunk_len, md);
+                // Pallas modulus bytes 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001 (LE)
+                static PALLAS_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xed,0x30,0x2d,0x99,0x1b,0xf9,0x4c,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x40];
+                static VESTA_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x21,0xeb,0x46,0x8c,0xdd,0xa8,0x94,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x40];
+                let (mod_ptr, pinv) = match curve {
+                    fuji_crate::FujiCurve::Pallas => (PALLAS_MOD.as_ptr() as *const std::ffi::c_void, 0x992d30ecffffffffu64),
+                    _ => (VESTA_MOD.as_ptr() as *const std::ffi::c_void, 0x8c46eb20ffffffffu64),
+                };
+                let omega_mont = {
+                    let mut buf = [0u8; 32];
+                    let repr = omega_native.to_repr();
+                    let bytes: &[u8] = repr.as_ref();
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+                };
+                jit.dispatch(&fresh_scalars, &omega_mont, mod_ptr, pinv, chunk_len, n_padded, &mut results_mont);
+                jit.free();
+            }
+            _ => panic!("FUJI_DEBUG_PATH must be 1, 2, or 3"),
         }
         if let Some(ref t) = _jit_timer { eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
 
