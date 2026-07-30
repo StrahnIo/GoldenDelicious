@@ -509,6 +509,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             _ => panic!("FUJI_DEBUG_PATH must be 1, 2, or 3"),
         }
         if let Some(ref t) = _jit_timer { eprintln!("[perf]   jit_eval: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0); }
+        if std::env::var("FUJI_DUMP_REF").is_ok() { eprintln!("[FLOW] jit_done, fuji_dump_ref start"); }
 
         // 4. Convert from Montgomery to native field
         let mut result_vals = Vec::with_capacity(poly_len);
@@ -537,9 +538,11 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             let sc_bytes: Vec<u8> = fresh_scalars.iter().flat_map(|f| f.to_bytes().to_vec()).collect();
             let _ = std::fs::write(format!("{}.scalars.bin", base), &sc_bytes);
             // .ref.bin via recursive evaluator
+            eprintln!("[FLOW] recursive_evaluate start");
             SKIP_FUJI.with(|f| f.set(true));
             let ref_result = self.evaluate(ast, domain);
             SKIP_FUJI.with(|f| f.set(false));
+            eprintln!("[FLOW] recursive_evaluate done");
             let ref_bytes: Vec<u8> = ref_result.values.iter().flat_map(|f| f.to_repr().as_ref().to_vec()).collect();
             let _ = std::fs::write(format!("{}.ref.bin", base), &ref_bytes);
             // Diagnostic: compare JIT out[0] against poly column 32 (first LOAD_ROTATED)
@@ -599,9 +602,57 @@ fn compile_ast<Ev, F: WithSmallOrderMulGroup<3>, B: Basis>(
     let mut code = Vec::new();
     let mut scalars = Vec::new();
     let mut challenge_indices = Vec::new();
-    compile_node(ast, &mut code, &mut scalars, &mut challenge_indices, stride, omega_native, curve);
-    code.push(fuji_crate::eval::Instr::CopyToOut);
+    // Compute acc_row from AST depth: above any term's scratch usage.
+    // Term evaluations start at sp = acc_row + 1 and never reach acc_row.
+    let ast_depth = ast.depth();
+    let acc_row = (ast_depth + 2).max(10);
+    compile_node_acc(ast, &mut code, &mut scalars, &mut challenge_indices,
+                     stride, omega_native, curve, acc_row);
+    code.push(fuji_crate::eval::Instr::CopyToOut { src_row: acc_row as u32 });
     (code, scalars, challenge_indices)
+}
+
+/// Like [`compile_node`] but passes a fixed `acc_row` for DistributePowers
+/// FMA instructions.  The accumulator lives at scratch[acc_row]; term
+/// evaluations start at scratch[acc_row+1] and never reach it.
+#[cfg(feature = "fuji")]
+fn compile_node_acc<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
+    ast: &Ast<E, F, B>,
+    code: &mut Vec<fuji_crate::eval::Instr>,
+    scalars: &mut Vec<fuji_crate::FujiField>,
+    challenge_indices: &mut Vec<usize>,
+    stride: u32,
+    omega_native: F,
+    curve: fuji_crate::FujiCurve,
+    acc_row: usize,
+) {
+    match ast {
+        Ast::DistributePowers(terms, base) => {
+            let mut terms = terms.iter();
+            if let Some(first) = terms.next() {
+                compile_node_acc(first, code, scalars, challenge_indices,
+                                 stride, omega_native, curve, acc_row);
+                // Raise accumulator from scratch[0] to scratch[acc_row] via DUP chain
+                for _ in 0..acc_row {
+                    code.push(fuji_crate::eval::Instr::Dup);
+                }
+                for term in terms {
+                    compile_node_acc(term, code, scalars, challenge_indices,
+                                     stride, omega_native, curve, acc_row);
+                    let idx = push_scalar(scalars, *base, curve);
+                    challenge_indices.push(idx as usize);
+                    if std::env::var("PERF_DEBUG").is_ok() {
+                        eprintln!("[COMP] DistributePowers base -> scalar[{}] = 0x{:02x?}", idx, scalars[idx as usize].to_bytes());
+                    }
+                    code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx, acc_row: acc_row as u32 });
+                }
+            } else {
+                let idx = push_scalar(scalars, F::ZERO, curve);
+                code.push(fuji_crate::eval::Instr::Constant { scalar_idx: idx });
+            }
+        }
+        _ => compile_node(ast, code, scalars, challenge_indices, stride, omega_native, curve),
+    }
 }
 
 #[cfg(feature = "fuji")]
@@ -665,7 +716,7 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
                         if std::env::var("PERF_DEBUG").is_ok() {
                             eprintln!("[COMP] DistributePowers base -> scalar[{}] = 0x{:02x?}", idx, scalars[idx as usize].to_bytes());
                         }
-                        code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx });
+                        code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx, acc_row: 0xFFFFFFFF });
                     }
                 } else {
                 let idx = push_scalar(scalars, F::ZERO, curve);
@@ -701,7 +752,7 @@ fn fmt_instr(instr: &fuji_crate::eval::Instr, scalars: &[fuji_crate::FujiField])
             let s = &scalars[*scalar_idx as usize];
             format!("SCALE scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
         }
-        fuji_crate::eval::Instr::Fma { scalar_idx } => {
+        fuji_crate::eval::Instr::Fma { scalar_idx, .. } => {
             let s = &scalars[*scalar_idx as usize];
             format!("FMA scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
         }
@@ -714,7 +765,7 @@ fn fmt_instr(instr: &fuji_crate::eval::Instr, scalars: &[fuji_crate::FujiField])
             format!("CONSTANT scalar_idx={} val=0x{:02x?}", scalar_idx, s.0)
         }
         fuji_crate::eval::Instr::Negate => "NEGATE".into(),
-        fuji_crate::eval::Instr::CopyToOut => "COPY_TO_OUT".into(),
+        fuji_crate::eval::Instr::CopyToOut { .. } => "COPY_TO_OUT".into(),
         fuji_crate::eval::Instr::Dup => "DUP".into(),
     }
 }
@@ -723,7 +774,7 @@ fn fmt_instr(instr: &fuji_crate::eval::Instr, scalars: &[fuji_crate::FujiField])
 /// operation together with the first few field element values it produces.
 /// Triggered by `FUJI_TRACE_AST=1`.
 #[cfg(feature = "fuji")]
-fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalContext, curve: fuji_crate::FujiCurve) {
+fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalContext, curve: fuji_crate::FujiCurve) -> Vec<fuji_crate::FujiField> {
     use fuji_crate::batch_field;
     let n = ctx.chunk_len;
     let n_rows = ctx.max_depth.max(3); // at least 3 for temp row
@@ -807,7 +858,7 @@ fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalC
                 eprintln!();
                 eprint!("       → "); dump(&scratch[sp - 1], sp);
             }
-            fuji_crate::eval::Instr::Fma { scalar_idx } => {
+        fuji_crate::eval::Instr::Fma { scalar_idx, .. } => {
                 let s = &ctx.scalars[*scalar_idx as usize];
                 let a = sp - 2; let term = sp - 1;
                 let tmp_a = scratch[a].clone();
@@ -860,9 +911,12 @@ fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalC
                 eprintln!("NEGATE");
                 eprint!("       → "); dump(&scratch[r], sp);
             }
-            fuji_crate::eval::Instr::CopyToOut => {
-                eprintln!("COPY_TO_OUT  (out = scratch[0])");
-                eprint!("       → "); dump(&scratch[0], 0);
+            fuji_crate::eval::Instr::CopyToOut { src_row } => {
+                let src_idx = if *src_row == 0xFFFFFFFF { 0usize } else { *src_row as usize };
+                let out = scratch[src_idx].clone();
+                eprintln!("COPY_TO_OUT  (out = scratch[{}])", src_idx);
+                eprint!("       → "); dump(&out, 0);
+                return out;
             }
             fuji_crate::eval::Instr::Dup => {
                 let src = scratch[sp - 1].clone();
@@ -872,6 +926,8 @@ fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalC
             }
         }
     }
+    // Fallback: if no CopyToOut found, return scratch[0]
+    scratch[0].clone()
 }
 
 /// Struct representing the [`Ast::Mul`] case.
