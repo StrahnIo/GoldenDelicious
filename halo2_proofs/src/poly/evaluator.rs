@@ -422,6 +422,38 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         // 3. Fresh scalars per prove (challenge values differ each round)
         let (_, fresh_scalars, _) = compile_ast(ast, stride as u32, omega_native, curve);
 
+        // 3b. Dispatch diagnostic (safe only — no fuji_sys access)
+        if std::env::var("PERF_DEBUG").is_ok() {
+            let bc_ref = BC_CACHE.with(|c| {
+                let g = c.borrow();
+                let (ref bc, _) = *g.as_ref().unwrap();
+                (bc.n_chunks, bc.chunk_len, bc.max_depth, bc.n, bc.challenge_indices.len())
+            });
+            eprintln!("[DISPATCH] Bytecode: n_chunks={} chunk_len={} max_depth={} n={} n_challenge={}",
+                bc_ref.0, bc_ref.1, bc_ref.2, bc_ref.3, bc_ref.4);
+            eprintln!("[DISPATCH] fresh_scalars ptr={:p} len={}", fresh_scalars.as_ptr(), fresh_scalars.len());
+            if fresh_scalars.len() > 0 {
+                let show = fresh_scalars.len().min(5);
+                eprint!("[DISPATCH] fresh_scalars[0..{}] =", show);
+                for s in fresh_scalars.iter().take(show) {
+                    eprint!(" 0x{:02x?}", s.to_bytes());
+                }
+                eprintln!();
+            }
+            if self.polys.len() > 32 {
+                let p32 = &self.polys[32];
+                if let Some(f0) = p32.values.first() {
+                    let mut buf = [0u8; 32];
+                    let repr = f0.to_repr();
+                    let bytes: &[u8] = repr.as_ref();
+                    buf[..bytes.len()].copy_from_slice(bytes);
+                    let mont = fuji_crate::FujiField::from_bytes(&buf).to_mont(curve);
+                    eprintln!("[DISPATCH] self.polys[32].native[0]=0x{:02x?} mont[0]=0x{:02x?}",
+                        repr.as_ref(), mont.to_bytes());
+                }
+            }
+        }
+
         // 4. Execute via one of three dispatch paths (selected by FUJI_DEBUG_PATH env var)
         let debug_path = std::env::var("FUJI_DEBUG_PATH").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
         let _jit_timer = if std::env::var("PERF_DEBUG").is_ok() { Some(std::time::Instant::now()) } else { None };
@@ -627,12 +659,15 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
             if let Some(first) = terms.next() {
                 compile_node(first, code, scalars, challenge_indices, stride, omega_native, curve);
                 for term in terms {
-                    compile_node(term, code, scalars, challenge_indices, stride, omega_native, curve);
-                    let idx = push_scalar(scalars, *base, curve);
-                    challenge_indices.push(idx as usize);
-                    code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx });
-                }
-            } else {
+                        compile_node(term, code, scalars, challenge_indices, stride, omega_native, curve);
+                        let idx = push_scalar(scalars, *base, curve);
+                        challenge_indices.push(idx as usize);
+                        if std::env::var("PERF_DEBUG").is_ok() {
+                            eprintln!("[COMP] DistributePowers base -> scalar[{}] = 0x{:02x?}", idx, scalars[idx as usize].to_bytes());
+                        }
+                        code.push(fuji_crate::eval::Instr::Fma { scalar_idx: idx });
+                    }
+                } else {
                 let idx = push_scalar(scalars, F::ZERO, curve);
                 code.push(fuji_crate::eval::Instr::Constant { scalar_idx: idx });
             }
@@ -641,6 +676,9 @@ fn compile_node<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
             let zeta_scaled = *scalar * F::ZETA;
             let idx = push_scalar(scalars, zeta_scaled, curve);
             challenge_indices.push(idx as usize);
+            if std::env::var("PERF_DEBUG").is_ok() {
+                eprintln!("[COMP] LinearTerm -> scalar[{}] = 0x{:02x?}", idx, scalars[idx as usize].to_bytes());
+            }
             code.push(fuji_crate::eval::Instr::LinearTerm { scalar_idx: idx });
         }
         Ast::ConstantTerm(scalar) => {
