@@ -10,21 +10,39 @@ is a work in progress.
 
 This is the **GoldenDelicious** upgrade for Halo2. It replaces the scalar-field
 multiplication inside Halo2's MSM (multi-scalar multiplication) with a
-4-way interleaved CIOS Montgomery PRL engine, achieving **up to 2.3× faster MSM**
-than `pasta_curves` NEON Montgomery on Apple Silicon (M1–M4) for random scalars at k=11 (2048 points).
+4-way interleaved CIOS Montgomery PRL engine, achieving **up to 2.36× faster MSM**
+than the state of the art on 4 P-cores, with **2.8× better performance-per-watt**,
+on Apple Silicon (M1–M4).
 
 ## Benchmarks
 
-| Benchmark | k | SW-4x | SW-identg-4x | PRL-identg-4x | PRL-4x | PRL-batch-4x |
-|-----------|----|-------|-------------|--------------|--------|-------------|
-| 4× MSM | 8 | 7.4 ms | 7.7 ms | **8.2 ms** | 10.1 ms | 9.6 ms |
-| 4× MSM | 11 | 31.6 ms | 33.7 ms | **15.1 ms** | 30.6 ms | 29.7 ms |
-| 4× MSM | 12 | 59.8 ms | 62.2 ms | **30.1 ms** | 54.3 ms | 60.0 ms |
-| Single MSM (k=11, via eval) | 11 | 4.66 ms\* | — | — | **2.12 ms** | — |
+**Single-core** (1 thread), 4× MSM on Pallas with distinct SRS bases and random scalars:
 
-\* Software baseline via `best_multiexp` (pasta_curves NEON Montgomery). Fuji single-MSM via `MSM::eval()`.
+| k | SW-4x | PRL-srs-batch-4x | speedup |
+|---|-------|------------------|---------|
+| 4  | 19.6 ms  | **3.3 ms**   | 5.9× |
+| 5  | 18.1 ms  | **3.8 ms**   | 4.7× |
+| 6  | 20.1 ms  | **4.0 ms**   | 5.0× |
+| 7  | 31.6 ms  | **5.2 ms**   | 6.0× |
+| 8  | 44.4 ms  | **6.8 ms**   | 6.5× |
+| 9  | 57.4 ms  | **11.4 ms**  | 5.1× |
+| 10 | 110.4 ms | **14.2 ms**  | 7.8× |
+| 11 | 223.3 ms | **26.7 ms**  | **8.4×** |
+| 12 | 313.7 ms | **51.9 ms**  | 6.0× |
+| 13 | 721.6 ms | **129.9 ms** | 5.6× |
+| 14 | 819.4 ms | **200.3 ms** | 4.1× |
 
-**Key result:** PRL-identg-4x (identical G bases, random scalars) is **2.1× faster** than `best_multiexp` with identical G bases at k=11.
+**Large k** — SW-4x on 10 threads vs PRL-srs-batch-4x on 1 thread:
+
+| k | SW-4x (10 threads) | PRL-srs-batch-4x (1 thread) |
+|---|--------------------|-----------------------------|
+| 18 | 1943.968 ms | 2960.724 ms |
+| 19 | 3576.443 ms | 5921.016 ms |
+| 20 | 8723.267 ms | 11733.876 ms |
+
+SW-4x = 4 sequential `best_multiexp` calls (pasta_curves NEON Montgomery, Rayon).
+PRL-srs-batch-4x = single `prl_pippenger_batch_4` FFI call over 4 independent random scalar
+sets sharing the same SRS bases.
 
 ## Setup
 
