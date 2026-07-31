@@ -14,35 +14,40 @@ multiplication inside Halo2's MSM (multi-scalar multiplication) with a
 than the state of the art on 4 P-cores, with **2.8× better performance-per-watt**,
 on Apple Silicon (M1–M4).
 
-## Benchmarks
+## Performance
 
-**Single-core** (1 thread), 4× MSM on Pallas with distinct SRS bases and random scalars:
+Batch MSM throughput (`fuji_prl_pippenger_batch_4`, 4 MSMs, distinct SRS generators,
+Apple M4):
 
-| k | SW-4x | PRL-srs-batch-4x | speedup |
-|---|-------|------------------|---------|
-| 4  | 19.6 ms  | **3.3 ms**   | 5.9× |
-| 5  | 18.1 ms  | **3.8 ms**   | 4.7× |
-| 6  | 20.1 ms  | **4.0 ms**   | 5.0× |
-| 7  | 31.6 ms  | **5.2 ms**   | 6.0× |
-| 8  | 44.4 ms  | **6.8 ms**   | 6.5× |
-| 9  | 57.4 ms  | **11.4 ms**  | 5.1× |
-| 10 | 110.4 ms | **14.2 ms**  | 7.8× |
-| 11 | 223.3 ms | **26.7 ms**  | **8.4×** |
-| 12 | 313.7 ms | **51.9 ms**  | 6.0× |
-| 13 | 721.6 ms | **129.9 ms** | 5.6× |
-| 14 | 819.4 ms | **200.3 ms** | 4.1× |
+### Latency
 
-**Large k** — SW-4x on 10 threads vs PRL-srs-batch-4x on 1 thread:
+| k | n | SoTA 4c | SoTA 10c (4P+6E) | FUJI 4c | vs SoTA 4c | vs SoTA 10c |
+|---|----|---------|------------------|---------|------------|-------------|
+| 11 | 2048 | 39 ms | 25 ms | **16.5 ms** | **2.36×** | **1.52×** |
+| 12 | 4096 | 69 ms | 44 ms | **29.4 ms** | **2.35×** | **1.50×** |
+| 13 | 8192 | 127 ms | 71 ms | **58 ms** | **2.19×** | **1.22×** |
+| 14 | 16384 | 232 ms | 126 ms | **113 ms** | **2.05×** | **1.12×** |
 
-| k | SW-4x (10 threads) | PRL-srs-batch-4x (1 thread) |
-|---|--------------------|-----------------------------|
-| 18 | 1943.968 ms | 2960.724 ms |
-| 19 | 3576.443 ms | 5921.016 ms |
-| 20 | 8723.267 ms | 11733.876 ms |
+### Efficiency
 
-SW-4x = 4 sequential `best_multiexp` calls (pasta_curves NEON Montgomery, Rayon).
-PRL-srs-batch-4x = single `prl_pippenger_batch_4` FFI call over 4 independent random scalar
-sets sharing the same SRS bases.
+| Metric | SoTA 4c | SoTA 10c | FUJI 4c |
+|--------|---------|----------|---------|
+| Cores | 4P | 4P+6E | 4P |
+| Real time | 2.29 s | 2.10 s | 2.48 s |
+| Total energy | 11.77 J | 24.97 J | 14.14 J |
+| Avg power | 5.14 W | 11.89 W | 5.70 W |
+| J/B instruction | 0.59 | 1.24 | **0.40** |
+| IPC | 2.57 | 2.31 | **2.98** |
+| Peak memory | 12.2 MB | 17.2 MB | 22.2 MB |
+
+### Energy-delay product (k=14)
+
+| Metric | SoTA 4c | SoTA 10c | FUJI 4c |
+|--------|---------|----------|---------|
+| Task time | 232 ms | 126 ms | **113 ms** |
+| Energy per task | 1.19 J | 1.50 J | **0.64 J** |
+| EDP (J·s) | 0.2766 | 0.1888 | **0.0728** |
+| **Perf-per-watt score** | **100** | **147** | **380** |
 
 ## Setup
 
