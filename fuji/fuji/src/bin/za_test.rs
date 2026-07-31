@@ -1,0 +1,47 @@
+/// Test battery for ZA tile extraction opcodes.
+/// Reports which .inst values execute without SIGILL.
+fn main() {
+    let candidates: [(&str, u32); 8] = [
+        ("base (zeroed)",       0xe1200000),
+        ("1A: x6 base",         0xe12000c0),
+        ("2A: alt p0",          0xe1201000),
+        ("2B: p0 override",     0xe1210000),
+        ("3a: w12+p0+x6",       0xe12010c0),
+        ("3b: w13+p0+x6",       0xe14010c0),
+        ("3c: w14+p0+x6",       0xe18010c0),
+        ("3d: w15+p0+x6",       0xe1c010c0),
+    ];
+
+    let mut buf = [0u8; 512];
+    let ptr = buf.as_mut_ptr();
+    let data = [0xABu8; 32];
+    let pdata = data.as_ptr();
+
+    for (name, opcode) in &candidates {
+        unsafe {
+            core::arch::asm!(
+                ".arch armv9-a+sme",
+                "smstart",
+                "ptrue   p0.b",
+                "mov     x2, #0", "mov     x3, #32",
+                "whilelt p1.b, x2, x3",
+                "ld1b    {{z0.b}}, p1/z, [{pdata}]",
+                "ld1b    {{z1.b}}, p1/z, [{pdata}]",
+                "umopa   za0.s, p0/m, p0/m, z0.b, z1.b",
+                "mov     w12, #0",
+                "mov     x6, {ptr}",
+                ".inst {inst}",
+                "smstop",
+                ptr = in(reg) ptr,
+                pdata = in(reg) pdata,
+                inst = in(reg) *opcode as u64,
+                out("x2") _, out("x3") _,
+                out("x6") _, out("x12") _,
+                out("p0") _, out("p1") _,
+                out("z0") _, out("z1") _,
+                options(nostack, preserves_flags),
+            );
+        }
+        println!("  {:#010x} ({:15}): OK  buf[0]={}", opcode, name, buf[0]);
+    }
+}
