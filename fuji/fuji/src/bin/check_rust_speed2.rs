@@ -29,9 +29,9 @@ fn main() {
     let t0 = Instant::now();
     for ch in 0..num_chunks {
         let chunk_start = (ch * cl) as i32;
-        let sc_ptr = all_sc.as_mut_ptr().add(ch * scratch_size);
-        let out_ptr = all_out.as_mut_ptr().add(ch * cl);
         unsafe {
+            let sc_ptr = all_sc.as_mut_ptr().add(ch * scratch_size);
+            let out_ptr = all_out.as_mut_ptr().add(ch * cl);
             (fn_ptr)(
                 chunk_start,
                 sc_ptr,
@@ -46,7 +46,7 @@ fn main() {
     }
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("Rust true seq (flat): {:.2} ms ({:.2} ms/chunk)", ms, ms / num_chunks as f64);
-    println!("First byte: {:02x}", unsafe { all_out[cl].limbs[0] });
+    println!("First byte: {:02x}", all_out[cl].limbs[0]);
 
     unsafe { fuji_sys::fuji_jit_free(fn_ptr); }
     unsafe { fuji_sys::fuji_bytecode_free(bc_ptr); }

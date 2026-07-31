@@ -21,7 +21,23 @@ pub use maybe_rayon::{
 #[cfg(feature = "multicore")]
 pub use maybe_rayon::{current_num_threads, iter::IndexedParallelIterator};
 
-use std::sync::OnceLock;
+use std::sync::Once;
+
+/// Thread-safe lazy pool. `std::sync::OnceLock` isn't available on the MSRV
+/// (1.60), so we roll a `Once`-guarded `UnsafeCell` instead.
+struct LazyPool {
+    once: Once,
+    cell: std::cell::UnsafeCell<Option<std::sync::Arc<maybe_rayon::ThreadPool>>>,
+}
+
+// SAFETY: the cell is written exactly once, inside `once.call_once`; every read
+// happens after `call_once` returns, so there is no data race.
+unsafe impl Sync for LazyPool {}
+
+static POOL: LazyPool = LazyPool {
+    once: Once::new(),
+    cell: std::cell::UnsafeCell::new(None),
+};
 
 /// Number of performance (P) cores on this machine.
 ///
@@ -62,10 +78,9 @@ where
 {
     #[cfg(feature = "multicore")]
     {
-        static POOL: OnceLock<maybe_rayon::ThreadPool> = OnceLock::new();
-        let pool = POOL.get_or_init(|| {
+        POOL.once.call_once(|| {
             let n = num_p_cores();
-            maybe_rayon::ThreadPoolBuilder::new()
+            let pool = maybe_rayon::ThreadPoolBuilder::new()
                 .num_threads(n)
                 .spawn_handler(|thread| {
                     std::thread::Builder::new()
@@ -84,8 +99,14 @@ where
                         .map(|_| ())
                 })
                 .build()
-                .expect("failed to build performance-core rayon pool")
+                .expect("failed to build performance-core rayon pool");
+            // SAFETY: guarded by `POOL.once`.
+            unsafe {
+                *POOL.cell.get() = Some(std::sync::Arc::new(pool));
+            }
         });
+        // SAFETY: the cell is initialized once `call_once` returns.
+        let pool = unsafe { POOL.cell.get().as_ref().unwrap().as_ref().unwrap().clone() };
         pool.install(f)
     }
     #[cfg(not(feature = "multicore"))]

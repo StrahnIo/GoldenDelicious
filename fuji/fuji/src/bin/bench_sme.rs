@@ -1,5 +1,8 @@
-use std::hint::black_box;
 use std::time::{Duration, Instant};
+
+fn black_box<T>(x: T) -> T {
+    unsafe { std::ptr::read_volatile(&x) }
+}
 
 const WARMUP: usize = 2000;
 const ITERATIONS: usize = 100000;
