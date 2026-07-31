@@ -912,6 +912,7 @@ dependencies = [
  "halo2_legacy_pdqsort",
  "image",
  "indexmap",
+ "libc",
  "maybe-rayon",
  "pasta_curves",
  "plotters",

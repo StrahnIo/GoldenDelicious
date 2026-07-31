@@ -2,6 +2,8 @@
 //! `halo2`. It's currently just a (very!) thin wrapper around `rayon` but may
 //! be extended in the future to allow for various parallelism strategies.
 
+#![allow(unsafe_code)] // thread QoS / affinity requires libc syscalls here
+
 #[cfg(all(
     feature = "multicore",
     target_arch = "wasm32",
@@ -18,6 +20,79 @@ pub use maybe_rayon::{
 
 #[cfg(feature = "multicore")]
 pub use maybe_rayon::{current_num_threads, iter::IndexedParallelIterator};
+
+use std::sync::OnceLock;
+
+/// Number of performance (P) cores on this machine.
+///
+/// On Apple Silicon, `hw.perflevel0.logicalcpu` reports the P-core count;
+/// elsewhere, fall back to all available cores.
+pub fn num_p_cores() -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        let mut val: u32 = 0;
+        let mut len = std::mem::size_of::<u32>();
+        let ok = unsafe {
+            libc::sysctlbyname(
+                b"hw.perflevel0.logicalcpu\0".as_ptr() as *const libc::c_char,
+                &mut val as *mut _ as *mut libc::c_void,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } == 0;
+        if ok && val > 0 {
+            return val as usize;
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+/// Run `f` on a rayon pool restricted to the performance cores.
+///
+/// The recursive evaluator dispatches its chunk work here so the slower
+/// efficiency cores don't drag down the wall time. Workers request
+/// `USER_INTERACTIVE` QoS (which the Apple Silicon scheduler biases toward the
+/// P-cores). Falls back to a plain call when `multicore` is disabled.
+pub fn install_on_p_cores<R>(f: impl FnOnce() -> R + Send) -> R
+where
+    R: Send,
+{
+    #[cfg(feature = "multicore")]
+    {
+        static POOL: OnceLock<maybe_rayon::ThreadPool> = OnceLock::new();
+        let pool = POOL.get_or_init(|| {
+            let n = num_p_cores();
+            maybe_rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .spawn_handler(|thread| {
+                    std::thread::Builder::new()
+                        .name(thread.name().unwrap_or("rayon-worker").to_string())
+                        .spawn(move || {
+                            #[cfg(target_os = "macos")]
+                            unsafe {
+                                // Biases the scheduler toward P-cores.
+                                libc::pthread_set_qos_class_self_np(
+                                    libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE,
+                                    0,
+                                );
+                            }
+                            thread.run();
+                        })
+                        .map(|_| ())
+                })
+                .build()
+                .expect("failed to build performance-core rayon pool")
+        });
+        pool.install(f)
+    }
+    #[cfg(not(feature = "multicore"))]
+    {
+        f()
+    }
+}
 
 #[cfg(not(feature = "multicore"))]
 pub fn current_num_threads() -> usize {

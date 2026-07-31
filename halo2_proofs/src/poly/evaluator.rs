@@ -31,7 +31,7 @@ use crate::arithmetic::fuji as fuji_helpers;
 /// in the current parallelization environment.
 fn get_chunk_params(poly_len: usize) -> (usize, usize) {
     // Check the level of parallelization we have available.
-    let num_threads = multicore::current_num_threads();
+    let num_threads = multicore::num_p_cores();
     // We scale the number of chunks by a constant factor, to ensure that if not all
     // threads are available, we can achieve more uniform throughput and don't end up
     // waiting on a couple of threads to process the last chunks.
@@ -309,21 +309,25 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let timers_ref = &timers;
         let depth = _depth;
         let mut result = B::empty_poly(domain);
-        multicore::scope(|scope| {
-            for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
-                scope.spawn(move |_| {
-                    let ctx = AstContext {
-                        domain,
-                        chunk_size,
-                        chunk_index,
-                        polys: &self.polys,
-                    };
-                    let mut scratch: Vec<Vec<F>> = (0..depth + 1)
-                        .map(|_| vec![F::ZERO; out.len()])
-                        .collect();
-                    recurse_into(out, ast, &ctx, &mut scratch[..], counters_ref, timers_ref);
-                });
-            }
+        // Dispatch chunk work on a P-core-only rayon pool (the slower
+        // efficiency cores otherwise drag down the wall time).
+        multicore::install_on_p_cores(|| {
+            multicore::scope(|scope| {
+                for (chunk_index, out) in result.chunks_mut(chunk_size).enumerate() {
+                    scope.spawn(move |_| {
+                        let ctx = AstContext {
+                            domain,
+                            chunk_size,
+                            chunk_index,
+                            polys: &self.polys,
+                        };
+                        let mut scratch: Vec<Vec<F>> = (0..depth + 1)
+                            .map(|_| vec![F::ZERO; out.len()])
+                            .collect();
+                        recurse_into(out, ast, &ctx, &mut scratch[..], counters_ref, timers_ref);
+                    });
+                }
+            });
         });
         if std::env::var("PERF_DEBUG").is_ok() {
             let c = |i: usize| counters[i].load(Ordering::Relaxed);
