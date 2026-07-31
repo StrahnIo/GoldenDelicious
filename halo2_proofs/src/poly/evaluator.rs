@@ -10,7 +10,6 @@ use std::{
 
 #[cfg(feature = "fuji")]
 thread_local! { static SKIP_FUJI: Cell<bool> = const { Cell::new(false) }; }
-#[cfg(feature = "fuji")]
 thread_local! { static FMA_STEP: Cell<usize> = const { Cell::new(0) }; }
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -384,12 +383,25 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
 
         // 2. Compile Bytecode once per thread. .fiji saved when FUJI_DUMP_BC is set.
         let n_padded = ((poly_len + chunk_len - 1) / chunk_len) * chunk_len;
+        // Compute safe acc_row: two-pass compile with acc_row = max_depth - 2
+        // so the accumulator sits above any term's max scratch usage.
+        let acc_row_estimate = {
+            let probe = compile_ast(ast, stride as u32, omega_native, curve, 10);
+            fuji_crate::eval::estimate_depth(&probe.0)
+        };
+        let safe_acc_row = acc_row_estimate.saturating_sub(2).max(10);
+        if std::env::var("PERF_DEBUG").is_ok() {
+            eprintln!("[DBG_ACCROW] acc_row_estimate={} safe_acc_row={}", acc_row_estimate, safe_acc_row);
+        }
         BC_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
             if guard.is_none() {
                 let (code, scalars, ci) =
-                    compile_ast(ast, stride as u32, omega_native, curve);
+                    compile_ast(ast, stride as u32, omega_native, curve, safe_acc_row);
                 let max_depth = fuji_crate::eval::estimate_depth(&code);
+                if std::env::var("PERF_DEBUG").is_ok() {
+                    eprintln!("[DBG_ACCROW] second-pass max_depth={}", max_depth);
+                }
                 let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
                     let data = poly.values.iter().map(|f| {
                         let mut buf = [0u8; 32];
@@ -422,68 +434,13 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                     }
                 }
                 if std::env::var("FUJI_TRACE_AST").is_ok() {
-                    // Build checkpoints: for each FMA instruction, compute expected accumulator
-                    // by running the recursive evaluator on the accumulated terms.
-                    // (instr_idx, expected_combined[0]_mont_bytes, expected_term[0]_mont_bytes)
-                    let mut checkpoints: Vec<(usize, Vec<u8>, Vec<u8>)> = Vec::new();
-                    let fma_positions: Vec<usize> = code.iter().enumerate()
-                        .filter(|(_, instr)| matches!(instr, fuji_crate::eval::Instr::Fma { .. }))
-                        .map(|(i, _)| i)
-                        .collect();
-                    if let Ast::DistributePowers(terms, base) = ast {
-                        let y_val = *base;
-                        let mut acc: Option<Polynomial<F, B>> = None;
-                        let mut fma_idx_pos = 0usize;
-                        for (ti, term) in terms.iter().enumerate() {
-                            if ti == 0 {
-                                SKIP_FUJI.with(|f| f.set(true));
-                                let term0 = self.evaluate(term, domain);
-                                SKIP_FUJI.with(|f| f.set(false));
-                                // Checkpoint right before first FMA: expected = term0[0]
-                                if let Some(&fma_pos) = fma_positions.first() {
-                                    if fma_pos > 0 {
-                                        let mut buf = [0u8; 32];
-                                        let repr = term0.values[0].to_repr();
-                                        let bytes: &[u8] = repr.as_ref();
-                                        buf[..bytes.len()].copy_from_slice(bytes);
-                                        let mont = fuji_crate::FujiField::from_bytes(&buf).to_mont(curve);
-                                        checkpoints.push((fma_pos - 1, mont.to_bytes().to_vec(), vec![]));
-                                    }
-                                }
-                                acc = Some(term0);
-                            } else {
-                                let fma_idx = fma_positions[fma_idx_pos];
-                                fma_idx_pos += 1;
-                                let mut cur = acc.take().unwrap();
-                                for v in cur.values.iter_mut() { *v = *v * y_val; }
-                                SKIP_FUJI.with(|f| f.set(true));
-                                let term_i = self.evaluate(term, domain);
-                                SKIP_FUJI.with(|f| f.set(false));
-                                // Store term value in Mont form
-                                let mut tb = [0u8; 32];
-                                let trep = term_i.values[0].to_repr();
-                                let tbytes: &[u8] = trep.as_ref();
-                                tb[..tbytes.len()].copy_from_slice(tbytes);
-                                let tmont = fuji_crate::FujiField::from_bytes(&tb).to_mont(curve);
-                                for i in 0..cur.values.len() { cur.values[i] = cur.values[i] + term_i.values[i]; }
-                                let mut buf = [0u8; 32];
-                                let repr = cur.values[0].to_repr();
-                                let bytes: &[u8] = repr.as_ref();
-                                buf[..bytes.len()].copy_from_slice(bytes);
-                                let mont = fuji_crate::FujiField::from_bytes(&buf).to_mont(curve);
-                                checkpoints.push((fma_idx, mont.to_bytes().to_vec(), tmont.to_bytes().to_vec()));
-                                acc = Some(cur);
-                                if ti >= 430 { break; }
-                            }
-                        }
-                    }
                     let trace_ctx = fuji_crate::eval::EvalContext {
                         chunk_len, chunk_start: 0, max_depth,
                         poly_table: poly_table.clone(), omega: omega_mont, scalars: scalars.clone(),
                     };
                     eprintln!(";; trace_execute  stride={}  chunk_len={}  poly_count={}  scalar_count={}  max_depth={}",
                         stride, chunk_len, trace_ctx.poly_table.len(), trace_ctx.scalars.len(), trace_ctx.max_depth);
-                    trace_execute(&code, &trace_ctx, curve, &checkpoints);
+                    trace_execute(&code, &trace_ctx, curve, &[]);
                 }
                 // FUJI_TERM_CMP=term_idx: compare flat bytecode vs recursive for a specific term
                 if let Some(term_idx) = std::env::var("FUJI_TERM_CMP").ok().and_then(|v| v.parse::<usize>().ok()) {
@@ -569,8 +526,24 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             }
         });
 
-        // 3. Fresh scalars per prove (challenge values differ each round)
-        let (_, fresh_scalars, _) = compile_ast(ast, stride as u32, omega_native, curve);
+        // 3. Fresh scalars per prove (challenge values differ each round).
+        // Scalar layout is independent of acc_row, so use a fixed placeholder.
+        let (_, fresh_scalars, _) = compile_ast(ast, stride as u32, omega_native, curve, 10);
+
+        // 3a. Fresh poly table per round. Permutation/lookup product polynomials
+        // are recomputed (and re-blinded) every prove round, so the cached
+        // bytecode's embedded poly table is stale for rounds 2+. Build the
+        // current round's table here and inject it into the executors.
+        let fresh_polys: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
+            let data = poly.values.iter().map(|f| {
+                let mut buf = [0u8; 32];
+                let repr = f.to_repr();
+                let bytes: &[u8] = repr.as_ref();
+                buf[..bytes.len()].copy_from_slice(bytes);
+                fuji_crate::FujiField::from_bytes(&buf).to_mont(curve)
+            }).collect();
+            fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
+        }).collect();
 
         // 3b. Dispatch diagnostic (safe only — no fuji_sys access)
         if std::env::var("PERF_DEBUG").is_ok() {
@@ -611,9 +584,12 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         match debug_path {
             1 => {
                 // Path 1: Bytecode (current, uses fuji_bytecode_read + fuji_jit_compile_from_bc)
+                // Inject fresh per-round polys (stale cached table would corrupt rounds 2+).
+                // Dispatch across all cores (dispatch_apply_f) for wall-clock throughput.
                 BC_CACHE.with(|cache| {
                     cache.borrow_mut().as_mut().unwrap().0
-                        .execute_all(&mut results_mont, 0, Some(&fresh_scalars));
+                        .execute_all(&mut results_mont, crate::multicore::current_num_threads() as i32,
+                                     Some(&fresh_scalars), Some(&fresh_polys));
                 });
             }
             2 => {
@@ -622,11 +598,11 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                 let n_scalars = fresh_scalars.len();
                 let jit = fuji_crate::eval::JitEval::compile(&bc_bytes, n_scalars, n_padded)
                     .expect("JitEval::compile");
-                jit.eval(&fresh_scalars, &mut results_mont).expect("JitEval::eval");
+                jit.eval_poly(&fresh_polys, &fresh_scalars, &mut results_mont).expect("JitEval::eval");
             }
             3 => {
                 // Path 3: Direct JIT (fuji_jit_compile directly, no bytecode serialization)
-                let (code, scalars, _ci) = compile_ast(ast, stride as u32, omega_native, curve);
+                let (code, scalars, _ci) = compile_ast(ast, stride as u32, omega_native, curve, safe_acc_row);
                 let md = fuji_crate::eval::estimate_depth(&code);
                 let poly_table: Vec<fuji_crate::eval::PolyEntry> = self.polys.iter().map(|poly| {
                     let data = poly.values.iter().map(|f| {
@@ -639,9 +615,12 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                     fuji_crate::eval::PolyEntry { data, domain_size: poly.values.len() }
                 }).collect();
                 let jit = fuji_crate::eval::build_jit(&code, &poly_table, chunk_len, md);
-                // Pallas modulus bytes 0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001 (LE)
-                static PALLAS_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xed,0x30,0x2d,0x99,0x1b,0xf9,0x4c,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x40];
-                static VESTA_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x21,0xeb,0x46,0x8c,0xdd,0xa8,0x94,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x40];
+                // Pallas modulus (LE bytes):
+                //   0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001
+                static PALLAS_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0xed,0x30,0x2d,0x99,0x1b,0xf9,0x4c,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x40];
+                // Vesta modulus (LE bytes):
+                //   0x40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001
+                static VESTA_MOD: [u8; 32] = [0x01,0x00,0x00,0x00,0x21,0xeb,0x46,0x8c,0xdd,0xa8,0x94,0x09,0xfc,0x98,0x46,0x22,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x40];
                 let (mod_ptr, pinv) = match curve {
                     fuji_crate::FujiCurve::Pallas => (PALLAS_MOD.as_ptr() as *const std::ffi::c_void, 0x992d30ecffffffffu64),
                     _ => (VESTA_MOD.as_ptr() as *const std::ffi::c_void, 0x8c46eb20ffffffffu64),
@@ -821,14 +800,11 @@ fn compile_ast<Ev, F: WithSmallOrderMulGroup<3>, B: Basis>(
     stride: u32,
     omega_native: F,
     curve: fuji_crate::FujiCurve,
+    acc_row: usize,
 ) -> (Vec<fuji_crate::eval::Instr>, Vec<fuji_crate::FujiField>, Vec<usize>) {
     let mut code = Vec::new();
     let mut scalars = Vec::new();
     let mut challenge_indices = Vec::new();
-    // Compute acc_row from AST depth: above any term's scratch usage.
-    // Term evaluations start at sp = acc_row + 1 and never reach acc_row.
-    let ast_depth = ast.depth();
-    let acc_row = (ast_depth + 2).max(10);
     compile_node_acc(ast, &mut code, &mut scalars, &mut challenge_indices,
                      stride, omega_native, curve, acc_row);
     code.push(fuji_crate::eval::Instr::CopyToOut { src_row: acc_row as u32 });
@@ -859,7 +835,12 @@ fn compile_node_acc<E, F: WithSmallOrderMulGroup<3>, B: Basis>(
                 for _ in 0..acc_row {
                     code.push(fuji_crate::eval::Instr::Dup);
                 }
+                let one_idx = push_scalar(scalars, F::ONE, curve);
                 for term in terms {
+                    // Push Mont(1) before each term so N > M (pushes > reductions),
+                    // ensuring the term's MUL chain never reaches sp = acc_row + 2
+                    // and corrupts the accumulator at scratch[acc_row].
+                    code.push(fuji_crate::eval::Instr::Constant { scalar_idx: one_idx });
                     compile_node_acc(term, code, scalars, challenge_indices,
                                      stride, omega_native, curve, acc_row);
                     let idx = push_scalar(scalars, *base, curve);
@@ -1176,7 +1157,7 @@ fn trace_execute(code: &[fuji_crate::eval::Instr], ctx: &fuji_crate::eval::EvalC
                 eprint!("       → "); dump(&out, 0);
                 return out;
             }
-            fuji_crate::eval::Instr::Dup => {
+             fuji_crate::eval::Instr::Dup => {
                 let src = scratch[sp - 1].clone();
                 scratch[sp].copy_from_slice(&src);
                 eprintln!("DUP");
