@@ -1,7 +1,11 @@
 fn main() {
+    // FUJI_LIB_DIR overrides the search dir. Default: the compiled binaries
+    // shipped inside this repo at <repo>/libfuji, so a repo-to-repo pin of
+    // GoldenDelicious resolves libfuji.a from the clone without extra setup.
     let lib_dir = std::env::var("FUJI_LIB_DIR").unwrap_or_else(|_| {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent().unwrap().parent().unwrap()
+            .join("libfuji")
             .to_string_lossy().to_string()
     });
 
