@@ -2,6 +2,23 @@ use crate::arithmetic::CurveAffine;
 use ff::PrimeField;
 use fuji::FujiCurve;
 use group::Group;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Runtime switch for the fuji evaluator path. Defaults to enabled; used by
+/// benchmarks to run fuji and the recursive evaluator in a single binary.
+static FUJI_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Enable/disable the fuji evaluator path. When disabled, `evaluate()` falls
+/// back to the recursive evaluator even if the fuji feature is compiled in
+/// and PRL is available on this machine.
+pub fn set_fuji_enabled(enabled: bool) {
+    FUJI_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether the fuji evaluator path is currently enabled.
+pub fn fuji_enabled() -> bool {
+    FUJI_ENABLED.load(Ordering::Relaxed)
+}
 
 pub fn fuji_available() -> bool {
     fuji::prl::prl_available()

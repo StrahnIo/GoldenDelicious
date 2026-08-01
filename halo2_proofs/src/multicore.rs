@@ -21,7 +21,26 @@ pub use maybe_rayon::{
 #[cfg(feature = "multicore")]
 pub use maybe_rayon::{current_num_threads, iter::IndexedParallelIterator};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
+
+/// Runtime switch between the P-core-only pool and the default rayon global
+/// pool for the recursive evaluator's chunk dispatch. Defaults to the
+/// P-core pool (`true`) to preserve existing behavior.
+static USE_P_CORES: AtomicBool = AtomicBool::new(true);
+
+/// Enable/disable the P-core-only rayon pool. When disabled, the recursive
+/// evaluator dispatches on the calling thread's rayon context (the global
+/// pool). Used by benchmarks to compare the two dispatch strategies in a
+/// single binary.
+pub fn set_use_p_cores(enabled: bool) {
+    USE_P_CORES.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether the P-core-only pool is currently enabled.
+pub fn use_p_cores() -> bool {
+    USE_P_CORES.load(Ordering::Relaxed)
+}
 
 /// Thread-safe lazy pool. `std::sync::OnceLock` isn't available on the MSRV
 /// (1.60), so we roll a `Once`-guarded `UnsafeCell` instead.
@@ -78,6 +97,11 @@ where
 {
     #[cfg(feature = "multicore")]
     {
+        if !USE_P_CORES.load(Ordering::Relaxed) {
+            // P-core pool disabled: run on the calling thread's rayon context
+            // (the global pool), i.e. upstream stock behavior.
+            return f();
+        }
         POOL.once.call_once(|| {
             let n = num_p_cores();
             let pool = maybe_rayon::ThreadPoolBuilder::new()
@@ -121,8 +145,13 @@ pub fn current_num_threads() -> usize {
 }
 
 #[cfg(not(feature = "multicore"))]
+/// No-op stand-in for rayon's `IndexedParallelIterator` (only used when the
+/// `multicore` feature is disabled).
 pub trait IndexedParallelIterator: std::iter::Iterator {}
 
+/// Combines `Iterator::try_fold` + `try_reduce` for either rayon's
+/// `ParallelIterator` (when the `multicore` feature is enabled) or a plain
+/// `Iterator` (when it is not).
 pub trait TryFoldAndReduce<T, E> {
     /// Implements `iter.try_fold().try_reduce()` for `rayon::iter::ParallelIterator`,
     /// falling back on `Iterator::try_fold` when the `multicore` feature flag is

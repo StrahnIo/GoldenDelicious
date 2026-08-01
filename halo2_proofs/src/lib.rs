@@ -19,7 +19,7 @@
 pub mod arithmetic;
 pub mod circuit;
 pub use pasta_curves as pasta;
-mod multicore;
+pub mod multicore;
 pub mod plonk;
 pub mod poly;
 pub mod transcript;

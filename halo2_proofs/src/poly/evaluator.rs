@@ -29,8 +29,14 @@ use crate::arithmetic::fuji as fuji_helpers;
 /// Returns `(chunk_size, num_chunks)` suitable for processing the given polynomial length
 /// in the current parallelization environment.
 fn get_chunk_params(poly_len: usize) -> (usize, usize) {
-    // Check the level of parallelization we have available.
-    let num_threads = multicore::num_p_cores();
+    // Check the level of parallelization we have available. When the P-core
+    // pool is disabled, size chunks for the full global pool (upstream
+    // behavior); otherwise size them for the P-core-only pool.
+    let num_threads = if multicore::use_p_cores() {
+        multicore::num_p_cores()
+    } else {
+        multicore::current_num_threads()
+    };
     // We scale the number of chunks by a constant factor, to ensure that if not all
     // threads are available, we can achieve more uniform throughput and don't end up
     // waiting on a couple of threads to process the last chunks.
@@ -160,7 +166,10 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
     {
         #[cfg(feature = "fuji")]
         if let Some(ref curve) = self.fuji_curve {
-            if fuji_helpers::fuji_available() && TypeId::of::<B>() == TypeId::of::<ExtendedLagrangeCoeff>() {
+            if fuji_helpers::fuji_available()
+                && fuji_helpers::fuji_enabled()
+                && TypeId::of::<B>() == TypeId::of::<ExtendedLagrangeCoeff>()
+            {
                 if !SKIP_FUJI.with(|f| f.get()) {
                     return self.evaluate_fuji(ast, domain, *curve);
                 }
@@ -365,11 +374,27 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         let stride = poly_len / domain_n;
         let chunk_len = 410;
 
-        // Thread-local Bytecode cache — compiled once per thread, persisted to disk.
+        // Thread-local Bytecode cache — keyed on the AST structure. Distinct
+        // circuits (e.g. different action counts) produce different bytecode /
+        // poly tables, so the cache is rebuilt when the fingerprint changes.
         #[cfg(feature = "fuji")]
         thread_local! {
-            static BC_CACHE: RefCell<Option<(fuji_crate::eval::Bytecode, Vec<u8>)>>
+            static BC_CACHE: RefCell<Option<(u64, fuji_crate::eval::Bytecode, Vec<u8>)>>
                 = const { RefCell::new(None) };
+        }
+
+        // The bytecode is a function of the AST structure AND the domain
+        // geometry (stride/rotations are encoded as immediates). Two rounds
+        // with the same AST shape but different domain sizes would collide on
+        // the structural fingerprint alone, so mix in the geometry too.
+        let n_polys = self.polys.len();
+        let cache_key = ast_fingerprint(ast)
+            ^ (stride as u64).wrapping_mul(0x9e3779b97f4a7c15)
+            ^ (n_polys as u64).wrapping_mul(0xbf58476d1ce4e5b9)
+            ^ (poly_len as u64).wrapping_mul(0x94d049bb133111eb)
+            ^ (domain.k() as u64).wrapping_mul(0x2545f4914f6cdd1d);
+        if std::env::var("PERF_DEBUG").is_ok() {
+            eprintln!("[CACHE] key=0x{:016x} polys={} stride={} poly_len={} k={}", cache_key, n_polys, stride, poly_len, domain.k());
         }
 
         let omega_native = domain.get_extended_omega();
@@ -395,7 +420,16 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         }
         BC_CACHE.with(|cache| {
             let mut guard = cache.borrow_mut();
-            if guard.is_none() {
+            let needs_build = match &*guard {
+                Some((k, _, _)) => *k != cache_key,
+                None => true,
+            };
+            if needs_build {
+                // Free the previous bytecode (a different AST structure) before
+                // replacing it — the C bytecode isn't Drop-managed.
+                if let Some((_, old, _)) = guard.take() {
+                    old.free();
+                }
                 let (code, scalars, ci) =
                     compile_ast(ast, stride as u32, omega_native, curve, safe_acc_row);
                 let max_depth = fuji_crate::eval::estimate_depth(&code);
@@ -522,7 +556,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                 }
                 let bc = fuji_crate::eval::Bytecode::load(&bc_bytes, ci);
                 eprintln!("[bc_cache] stored {} bytes", bc_bytes.len());
-                *guard = Some((bc, bc_bytes));
+                *guard = Some((cache_key, bc, bc_bytes));
             }
         });
 
@@ -549,7 +583,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
         if std::env::var("PERF_DEBUG").is_ok() {
             let bc_ref = BC_CACHE.with(|c| {
                 let g = c.borrow();
-                let (ref bc, _) = *g.as_ref().unwrap();
+                let (_, ref bc, _) = *g.as_ref().unwrap();
                 (bc.n_chunks, bc.chunk_len, bc.max_depth, bc.n, bc.challenge_indices.len())
             });
             eprintln!("[DISPATCH] Bytecode: n_chunks={} chunk_len={} max_depth={} n={} n_challenge={}",
@@ -587,14 +621,15 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
                 // Inject fresh per-round polys (stale cached table would corrupt rounds 2+).
                 // Dispatch across all cores (dispatch_apply_f) for wall-clock throughput.
                 BC_CACHE.with(|cache| {
-                    cache.borrow_mut().as_mut().unwrap().0
-                        .execute_all(&mut results_mont, crate::multicore::current_num_threads() as i32,
-                                     Some(&fresh_scalars), Some(&fresh_polys));
+                    let mut guard = cache.borrow_mut();
+                    let bc = &mut guard.as_mut().unwrap().1;
+                    bc.execute_all(&mut results_mont, crate::multicore::current_num_threads() as i32,
+                                   Some(&fresh_scalars), Some(&fresh_polys));
                 });
             }
             2 => {
                 // Path 2: JitEval (fuji_jit_compile_from_buf + fuji_jit_eval_cached)
-                let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().1.clone());
+                let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().2.clone());
                 let n_scalars = fresh_scalars.len();
                 let jit = fuji_crate::eval::JitEval::compile(&bc_bytes, n_scalars, n_padded)
                     .expect("JitEval::compile");
@@ -657,7 +692,7 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
             let base = format!("prove_{}", ts);
             // .fuji from the cached serialized bytes
-            let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().1.clone());
+            let bc_bytes = BC_CACHE.with(|c| c.borrow().as_ref().unwrap().2.clone());
             eprintln!("[FUJI_DUMP_REF] bc_bytes size = {}, writing to {}", bc_bytes.len(), base);
             match std::fs::write(&base, &bc_bytes) {
                 Ok(_) => eprintln!("[FUJI_DUMP_REF] write OK"),
@@ -789,6 +824,45 @@ impl<E, F: Field, B: Basis + 'static> Evaluator<E, F, B> {
             _marker: PhantomData,
         }
     }
+}
+
+/// Structural fingerprint of an AST, ignoring challenge scalar values.
+///
+/// The fuji bytecode is a function of the AST *structure* (node types, column
+/// indices, rotations) but not the challenge scalars. Two circuits with the
+/// same structure reuse the cached bytecode; a different structure (e.g. a
+/// different number of actions) must rebuild it.
+#[cfg(feature = "fuji")]
+fn ast_fingerprint<E, F: Field, B: Basis>(ast: &Ast<E, F, B>) -> u64 {
+    fn mix(h: u64, x: u64) -> u64 {
+        (h ^ x).wrapping_mul(0x100000001b3)
+    }
+    fn walk<E, F: Field, B: Basis>(ast: &Ast<E, F, B>, h: u64) -> u64 {
+        match ast {
+            Ast::Poly(leaf) => mix(mix(mix(h, 0x01), leaf.index as u64), leaf.rotation.0 as u64),
+            Ast::Add(a, b) => {
+                let h = mix(h, 0x02);
+                let h = walk(a, h);
+                walk(b, h)
+            }
+            Ast::Mul(AstMul(a, b)) => {
+                let h = mix(h, 0x03);
+                let h = walk(a, h);
+                walk(b, h)
+            }
+            Ast::Scale(a, _) => {
+                let h = mix(h, 0x04);
+                walk(a, h)
+            }
+            Ast::DistributePowers(terms, _) => {
+                let h = mix(h, 0x05);
+                terms.iter().fold(h, |h, t| walk(t, h))
+            }
+            Ast::LinearTerm(_) => mix(h, 0x06),
+            Ast::ConstantTerm(_) => mix(h, 0x07),
+        }
+    }
+    walk(ast, 0xcbf29ce484222325)
 }
 
 /// Compile a recursive AST (ExtendedLagrangeCoeff basis) into a flat
@@ -1700,7 +1774,7 @@ mod tests {
         };
         eprintln!("Testing short-chunk regression with k = {}", k);
 
-        fn test_case<E: Copy + Send + Sync, B: BasisOps>(
+        fn test_case<E: Copy + Send + Sync, B: BasisOps + 'static>(
             k: u32,
             mut evaluator: Evaluator<E, pallas::Base, B>,
         ) {
